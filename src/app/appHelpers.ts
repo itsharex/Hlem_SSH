@@ -1,0 +1,181 @@
+import { remoteApi } from "../api/remoteApi";
+import { getErrorMessage, initialRemotePath } from "../lib/configMapping";
+import {
+  getBaseName as getRemoteBaseName,
+  joinPath as joinRemotePath,
+  resolveRemoteTargetPath,
+} from "../lib/path";
+import type {
+  BackupSettings,
+  HostKeyVerification,
+  RemoteSession,
+  ServerTelemetry,
+  SessionConfig,
+  SessionInput,
+  TerminalEntry,
+} from "../types";
+
+export const CWD_TRACKING_COMMAND =
+  "export HELM_CWD_HOOK=1; __helm_emit_cwd(){ printf \"\\033]777;cwd=%s\\007\" \"$PWD\"; }; cd(){ builtin cd \"$@\" && __helm_emit_cwd; }; export PROMPT_COMMAND='__helm_emit_cwd'; __helm_emit_cwd\n";
+
+const CWD_TRACKING_ECHO_FRAGMENTS = [
+  "HELM_CWD_HOOK=1",
+  "__helm_emit_cwd",
+  "777;cwd=%s",
+];
+
+export function sessionConfigToInput(config: SessionConfig): SessionInput {
+  return {
+    name: config.name,
+    groupId: config.groupId ?? null,
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    auth: config.auth,
+    ssh: config.ssh,
+    defaultPath: config.defaultPath,
+    tags: config.tags,
+    note: config.note ?? null,
+    terminal: config.terminal,
+    sftp: config.sftp,
+  };
+}
+
+export function createNextSessionName(sessions: SessionConfig[], excludeId?: string) {
+  const usedNames = new Set(sessions.filter((session) => session.id !== excludeId).map((session) => session.name));
+  let index = 1;
+  while (usedNames.has(`新服务器 ${index}`)) index += 1;
+  return `新服务器 ${index}`;
+}
+
+export function shouldSkipTerminalEntry(entries: TerminalEntry[], entry: TerminalEntry) {
+  const last = entries[entries.length - 1];
+  return Boolean(last && last.kind === entry.kind && last.content === entry.content);
+}
+
+export async function runUploadQueue<T>(
+  items: string[],
+  concurrency: number,
+  worker: (item: string) => Promise<T>,
+): Promise<T[]> {
+  const results: T[] = [];
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(12, concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < items.length) {
+        const item = items[cursor];
+        cursor += 1;
+        results.push(await worker(item));
+      }
+    }),
+  );
+  return results;
+}
+
+export function uploadConcurrency(count: number) {
+  const cores = typeof navigator === "undefined" ? 4 : navigator.hardwareConcurrency || 4;
+  if (count <= 1) return 1;
+  if (count <= 3) return Math.min(count, 2);
+  if (count <= 8) return Math.min(count, Math.max(2, Math.floor(cores / 2)));
+  return Math.min(12, Math.max(4, Math.floor(cores * 0.75)));
+}
+
+export function shouldRunAutoBackup(settings: BackupSettings, records: { status: string; createdAt: string }[]) {
+  const interval = backupFrequencyMs(settings.frequency);
+  if (!interval) return false;
+  const lastSuccess = records
+    .filter((record) => record.status === "success")
+    .map((record) => new Date(record.createdAt).getTime())
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => right - left)[0];
+  if (!lastSuccess) return true;
+  return Date.now() - lastSuccess >= interval;
+}
+
+function backupFrequencyMs(frequency: BackupSettings["frequency"]) {
+  if (frequency === "hourly") return 60 * 60 * 1000;
+  if (frequency === "daily") return 24 * 60 * 60 * 1000;
+  if (frequency === "weekly") return 7 * 24 * 60 * 60 * 1000;
+  return 0;
+}
+
+function appendTerminalStreamEntry(entries: TerminalEntry[], entry: TerminalEntry) {
+  if (shouldSkipTerminalEntry(entries, entry)) return entries;
+  const last = entries[entries.length - 1];
+  if (last && entry.kind === "output" && last.kind === entry.kind) {
+    return [
+      ...entries.slice(0, -1),
+      {
+        ...last,
+        content: `${last.content}${entry.content}`,
+      },
+    ];
+  }
+  return [...entries, entry];
+}
+
+export function appendTerminalStreamEntries(entries: TerminalEntry[], nextEntries: TerminalEntry[]) {
+  return nextEntries.reduce((current, entry) => appendTerminalStreamEntry(current, entry), entries);
+}
+
+export function stripCwdMarkers(data: string) {
+  let cwd: string | null = null;
+  let markerSeen = false;
+  const withoutMarkers = data.replace(/\x1b\]777;cwd=([^\x07]*)\x07/g, (_, value: string) => {
+    cwd = value;
+    markerSeen = true;
+    return "";
+  });
+  const withoutCommandEcho = withoutMarkers
+    .split(/(\r?\n)/)
+    .filter((chunk) => !CWD_TRACKING_ECHO_FRAGMENTS.every((fragment) => chunk.includes(fragment)))
+    .join("");
+  return { data: withoutCommandEcho, cwd, markerSeen };
+}
+
+export function remoteSessionPath(session: Pick<RemoteSession, "username" | "currentPath">) {
+  return initialRemotePath(session.username, session.currentPath);
+}
+
+export async function resolveSftpOperationTarget(sftpId: string, currentPath: string, sourcePath: string, value: string) {
+  const target = resolveRemoteTargetPath(currentPath, value);
+  if (target === "/" || (await isRemoteDirectory(sftpId, target))) {
+    return joinRemotePath(target, getRemoteBaseName(sourcePath));
+  }
+  return target;
+}
+
+async function isRemoteDirectory(sftpId: string, path: string) {
+  try {
+    await remoteApi.listFiles(sftpId, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function hasTelemetryData(telemetry: ServerTelemetry) {
+  return Boolean(
+    telemetry.uptime !== "未知" ||
+      telemetry.ip ||
+      telemetry.cpu > 0 ||
+      telemetry.memory.total > 0 ||
+      telemetry.swap.total > 0 ||
+      telemetry.processes.some((process) => process.pid > 0 && process.name !== "process") ||
+      telemetry.disks.some((disk) => disk.total > 0),
+  );
+}
+
+export function sftpUnavailableMessage(error: unknown) {
+  const message = getErrorMessage(error);
+  if (!message.includes("ConnectFailed")) return message;
+  return `${message} 建议在服务器 /etc/ssh/sshd_config 中提高 MaxSessions（例如 10），确认 Subsystem sftp 已启用，然后重启 sshd。`;
+}
+
+export function getHostKeyPayload(error: unknown): HostKeyVerification | null {
+  if (!error || typeof error !== "object") return null;
+  const payload = error as { code?: string; message?: unknown };
+  if (payload.code !== "hostKeyUntrusted" && payload.code !== "hostKeyChanged") return null;
+  return payload.message && typeof payload.message === "object" ? (payload.message as HostKeyVerification) : null;
+}

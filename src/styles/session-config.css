@@ -1,0 +1,330 @@
+/* ─── Session Config Modal ─────────────────────────────────────────────── */
+
+/* 弹窗容器：毛玻璃与深层阴影美化 */
+.sessionConfigModal .ant-modal-content {
+  border-radius: 20px !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  backdrop-filter: blur(24px) saturate(150%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.6) !important;
+  box-shadow: 0 32px 64px -16px rgba(0,0,0,0.2) !important;
+  overflow: hidden;
+}
+
+.sessionConfigModal .ant-modal-header {
+  padding: 24px 32px 16px;
+  background: transparent !important;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.sessionConfigModal .ant-modal-close {
+  top: 24px;
+  inset-inline-end: 24px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.sessionConfigModal .ant-modal-close:hover {
+  background: rgba(239,68,68,0.15);
+  color: var(--danger);
+}
+
+.sessionConfigModal .ant-modal-body {
+  padding: 24px 32px 16px;
+  background: transparent !important;
+  max-height: min(560px, calc(100vh - 220px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sessionConfigModal .ant-modal-body > .ant-form {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.sessionConfigModal .ant-modal-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.ant-modal-wrap:has(.sessionConfigModal) {
+  overflow: hidden !important;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ant-modal-wrap:has(.sessionConfigModal)::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ─── Tab 改为 macOS 胶囊分段控件 ───────────────────────────────────────── */
+.sessionConfigModal .ant-tabs-nav {
+  margin-bottom: 20px;
+}
+
+/* 去除 nav 下方横线 */
+.sessionConfigModal .ant-tabs-nav::before {
+  display: none !important;
+}
+
+/* Tab 列表整体做成胶囊容器 */
+.sessionConfigModal .ant-tabs-nav-list {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+
+/* 每个 Tab 项：透明底、圆角 */
+.sessionConfigModal .ant-tabs-tab {
+  margin: 0 !important;
+  padding: 6px 18px !important;
+  border-radius: 8px !important;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary) !important;
+  background: transparent !important;
+  border: none !important;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.sessionConfigModal .ant-tabs-tab:hover {
+  color: var(--accent) !important;
+  background: rgba(59, 130, 246, 0.08) !important;
+}
+
+/* 激活 Tab：白色卡片 + 阴影，模拟 macOS 分段选择器 */
+.sessionConfigModal .ant-tabs-tab-active {
+  background: #ffffff !important;
+  color: var(--accent) !important;
+  font-weight: 700 !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12), 0 0 0 1px rgba(59,130,246,0.15) !important;
+}
+
+/* 隐藏原来的墨水条 */
+.sessionConfigModal .ant-tabs-ink-bar {
+  display: none !important;
+}
+
+/* ─── 表单标签 ────────────────────────────────────────────────────────────  */
+.sessionConfigModal .ant-form-item-label > label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0;
+  /* 去掉全大写，更自然 */
+  text-transform: none;
+}
+
+.sessionConfigModal .ant-form-item {
+  margin-bottom: 14px !important;
+}
+
+/* ─── 输入框统一样式 ──────────────────────────────────────────────────────── */
+.sessionConfigModal .ant-input {
+  height: 38px;
+  border-radius: 9px !important;
+  border: 1.5px solid var(--border) !important;
+  background: #ffffff !important;
+  font-size: 13px;
+  padding-inline: 14px;
+  color: var(--text-primary);
+  /* 内嵌阴影给输入框增加凹陷感 */
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04) !important;
+  transition: border-color 0.18s, box-shadow 0.18s !important;
+}
+
+.sessionConfigModal .ant-input:hover {
+  border-color: #93c5fd !important;
+}
+
+.sessionConfigModal .ant-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12), inset 0 1px 2px rgba(0,0,0,0.02) !important;
+  background: #ffffff !important;
+}
+
+/* InputNumber */
+.sessionConfigModal .ant-input-number {
+  border-radius: 9px !important;
+  border: 1.5px solid var(--border) !important;
+  background: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04) !important;
+  transition: all 0.18s !important;
+}
+
+.sessionConfigModal .ant-input-number:hover {
+  border-color: #93c5fd !important;
+}
+
+.sessionConfigModal .ant-input-number-focused {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
+}
+
+/* Select */
+.sessionConfigModal .ant-select-selector {
+  height: 38px !important;
+  border-radius: 9px !important;
+  border: 1.5px solid var(--border) !important;
+  background: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04) !important;
+  align-items: center;
+  padding-inline: 14px 38px !important;
+  transition: all 0.18s !important;
+}
+
+.sessionConfigModal .ant-select-selection-wrap {
+  min-width: 0;
+}
+
+.sessionConfigModal .ant-select-arrow {
+  inset-inline-end: 14px !important;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.sessionConfigModal .ant-select-clear {
+  inset-inline-end: 12px !important;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sessionConfigModal .ant-select-allow-clear .ant-select-arrow {
+  display: none;
+}
+
+.sessionConfigModal .ant-select:not(.ant-select-focused):hover .ant-select-selector {
+  border-color: #93c5fd !important;
+}
+
+.sessionConfigModal .ant-select-focused .ant-select-selector {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
+}
+
+/* Password wrapper */
+.sessionConfigModal .ant-input-affix-wrapper {
+  height: 38px;
+  border-radius: 9px !important;
+  border: 1.5px solid var(--border) !important;
+  background: #ffffff !important;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04) !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-inline: 14px !important;
+  align-items: center;
+  transition: all 0.18s !important;
+}
+
+.sessionConfigModal .ant-input-affix-wrapper > .ant-input {
+  height: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.sessionConfigModal .ant-input-affix-wrapper .ant-input-prefix {
+  margin-inline-end: 8px;
+}
+
+.sessionConfigModal .ant-input-affix-wrapper .ant-input-suffix {
+  margin-inline-start: 8px;
+}
+
+.sessionConfigModal .ant-input-affix-wrapper:not(.ant-input-affix-wrapper-focused):hover {
+  border-color: #93c5fd !important;
+}
+
+.sessionConfigModal .ant-input-affix-wrapper-focused {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
+}
+
+/* TextArea */
+.sessionConfigModal .ant-input[rows] {
+  height: auto;
+}
+
+/* ─── Footer ─────────────────────────────────────────────────────────────── */
+.sessionConfigModal .ant-modal-footer {
+  padding: 16px 32px 20px;
+  background: transparent !important;
+  border-top: 1px solid rgba(0,0,0,0.06);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.sessionConfigModal .ant-modal-footer .ant-btn {
+  height: 36px;
+  padding: 0 20px;
+  border-radius: 9px !important;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s !important;
+}
+
+.sessionConfigModal .ant-modal-footer .ant-btn-default {
+  border: 1.5px solid var(--border) !important;
+  color: var(--text-secondary) !important;
+  background: var(--bg-surface) !important;
+}
+
+.sessionConfigModal .ant-modal-footer .ant-btn-default:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+}
+
+.sessionConfigModal .ant-modal-footer .ant-btn-primary {
+  border: none !important;
+  background: linear-gradient(135deg, #3b82f6 0%, #818cf8 100%) !important;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+  color: #fff !important;
+}
+
+.sessionConfigModal .ant-modal-footer .ant-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.5) !important;
+  filter: brightness(1.05);
+}
+
+/* ─── 表单网格布局 ──────────────────────────────────────────────────────── */
+.sessionFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.sessionFormWide {
+  grid-column: 1 / -1;
+}
+
+.fullControl {
+  width: 100%;
+}
+

@@ -1,0 +1,149 @@
+use super::*;
+
+impl RemoteRuntime {
+    pub async fn open_terminal(
+        &self,
+        app: &AppHandle,
+        connection_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> AppResult<TerminalInfo> {
+        let connection = self.connection(connection_id).await?;
+        let channel = {
+            let handle = connection.handle.lock().await;
+            handle.channel_open_session().await.map_err(remote_error)?
+        };
+        let (mut read_half, write_half) = channel.split();
+        write_half
+            .request_pty(true, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+            .await
+            .map_err(remote_error)?;
+
+        let terminal_id = Uuid::new_v4().to_string();
+        let writer = Arc::new(Mutex::new(write_half));
+        let info = TerminalInfo {
+            terminal_id: terminal_id.clone(),
+            connection_id: connection_id.to_string(),
+            cols,
+            rows,
+            opened_at: now(),
+        };
+        self.terminals.write().await.insert(
+            terminal_id.clone(),
+            TerminalRecord {
+                info: info.clone(),
+                writer: writer.clone(),
+            },
+        );
+
+        let app_handle = app.clone();
+        let terminals = self.terminals.clone();
+        let closed_terminal_id = terminal_id.clone();
+        tokio::spawn(async move {
+            while let Some(message) = read_half.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        emit_terminal_output(&app_handle, &closed_terminal_id, "output", &data)
+                    }
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        emit_terminal_output(&app_handle, &closed_terminal_id, "error", &data)
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        events::emit(
+                            &app_handle,
+                            events::TERMINAL_OUTPUT,
+                            TerminalOutputPayload {
+                                terminal_id: closed_terminal_id.clone(),
+                                kind: "system".to_string(),
+                                data: format!("进程退出，状态码 {exit_status}"),
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            let removed = terminals
+                .write()
+                .await
+                .remove(&closed_terminal_id)
+                .is_some();
+            if removed {
+                emit_terminal_closed(&app_handle, closed_terminal_id);
+            }
+        });
+
+        let shell_result = {
+            let writer = writer.lock().await;
+            writer.request_shell(true).await.map_err(remote_error)
+        };
+        if let Err(error) = shell_result {
+            self.terminals.write().await.remove(&terminal_id);
+            return Err(error);
+        }
+
+        Ok(info)
+    }
+
+    pub async fn terminal_write(&self, terminal_id: &str, data: String) -> AppResult<()> {
+        let writer = self.terminal_writer(terminal_id).await?;
+        let writer = writer.lock().await;
+        let mut stream = writer.make_writer();
+        stream
+            .write_all(data.as_bytes())
+            .await
+            .map_err(remote_error)?;
+        stream.flush().await.map_err(remote_error)?;
+        Ok(())
+    }
+
+    pub async fn terminal_resize(&self, terminal_id: &str, cols: u16, rows: u16) -> AppResult<()> {
+        let record = self
+            .terminals
+            .read()
+            .await
+            .get(terminal_id)
+            .cloned()
+            .ok_or_else(|| AppError::missing_terminal(terminal_id))?;
+        if record.info.cols == cols && record.info.rows == rows {
+            return Ok(());
+        }
+        let result = {
+            let writer = record.writer.lock().await;
+            writer.window_change(cols as u32, rows as u32, 0, 0).await
+        };
+        result.map_err(remote_error)?;
+
+        if let Some(record) = self.terminals.write().await.get_mut(terminal_id) {
+            record.info.cols = cols;
+            record.info.rows = rows;
+        }
+        Ok(())
+    }
+
+    pub async fn terminal_close(&self, app: &AppHandle, terminal_id: &str) -> AppResult<()> {
+        let record = self
+            .terminals
+            .write()
+            .await
+            .remove(terminal_id)
+            .ok_or_else(|| AppError::missing_terminal(terminal_id))?;
+        close_terminal_record(record).await?;
+        emit_terminal_closed(app, terminal_id.to_string());
+        Ok(())
+    }
+
+    pub async fn exec_on_connection(
+        &self,
+        connection_id: &str,
+        command: String,
+        timeout_ms: Option<u64>,
+    ) -> AppResult<ExecResult> {
+        let connection = self.connection(connection_id).await?;
+        exec_with_handle(
+            &connection.handle,
+            command,
+            timeout_ms.unwrap_or(DEFAULT_EXEC_TIMEOUT_MS),
+        )
+        .await
+    }
+}

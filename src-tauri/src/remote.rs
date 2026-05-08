@@ -1,0 +1,704 @@
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    io::SeekFrom,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::{Duration, SystemTime},
+};
+
+use chrono::{DateTime, Utc};
+use russh::{
+    client::{self, Handler},
+    keys::{decode_secret_key, load_secret_key, ssh_key, PrivateKeyWithHashAlg},
+    Channel, ChannelMsg, ChannelWriteHalf, Disconnect,
+};
+use russh_sftp::{
+    client::{fs::DirEntry, SftpSession},
+    protocol::{FileAttributes, FileType as SftpFileType, OpenFlags},
+};
+use serde::Serialize;
+use tauri::AppHandle;
+use tokio::{
+    fs::{File, OpenOptions},
+    io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    sync::{Mutex, RwLock, Semaphore},
+    task::JoinHandle,
+    time::{timeout, Instant, MissedTickBehavior},
+};
+use uuid::Uuid;
+
+use crate::{
+    config::{now, AuthMethod, KnownHostEntry, SessionConfig, SshProxyOptions},
+    errors::{AppError, AppResult, HostKeyVerification},
+    events,
+};
+
+mod event_emitters;
+mod lifecycle;
+mod proxy;
+mod runtime_connection;
+mod runtime_forward;
+mod runtime_registry;
+mod runtime_sftp;
+mod runtime_telemetry;
+mod runtime_terminal;
+mod runtime_transfer;
+mod sftp;
+mod ssh;
+mod telemetry;
+mod transfer;
+
+use event_emitters::*;
+use lifecycle::*;
+use proxy::*;
+use sftp::*;
+use ssh::*;
+use telemetry::*;
+use transfer::*;
+
+const DEFAULT_EXEC_TIMEOUT_MS: u64 = 20_000;
+const MAX_TEXT_EDIT_BYTES: u64 = 10 * 1024 * 1024;
+const TELEMETRY_PROCESS_MIN_INTERVAL_MS: u64 = 15_000;
+const TELEMETRY_DISK_MIN_INTERVAL_MS: u64 = 60_000;
+const TELEMETRY_IP_MIN_INTERVAL_MS: u64 = 600_000;
+const TELEMETRY_FAST_TIMEOUT_MS: u64 = 8_000;
+const TELEMETRY_SLOW_TIMEOUT_MS: u64 = 12_000;
+const MAX_SFTP_TRANSFER_CONCURRENCY: usize = 12;
+const SFTP_TRANSFER_POOL_SIZE: usize = 4;
+const SFTP_OWNER_LOOKUP_TIMEOUT_MS: u64 = 1_500;
+const MAX_SFTP_SEARCH_CONCURRENCY: usize = 12;
+const MAX_SFTP_SEARCH_DIRS: usize = 800;
+const MAX_SFTP_SEARCH_ENTRIES: usize = 6000;
+const SFTP_REMOTE_SEARCH_TIMEOUT_MS: u64 = 3_500;
+const MAX_TRANSFER_HISTORY: usize = 12;
+const TRANSFER_BUFFER_BYTES: usize = 512 * 1024;
+const TRANSFER_ACCELERATED_BUFFER_BYTES: usize = 2 * 1024 * 1024;
+const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(250);
+const TRANSFER_PROGRESS_MIN_BYTES: u64 = 1024 * 1024;
+const TELEMETRY_BASE_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
+if read -r up _ < /proc/uptime 2>/dev/null; then printf "UPTIME %.0f\n" "$up"; fi;
+mem_total=0; mem_free=0; buffers=0; cached=0; sreclaimable=0; shmem=0; swap_total=0; swap_free=0;
+while read -r key value _; do
+  case "$key" in
+    MemTotal:) mem_total=$((value * 1024));;
+    MemFree:) mem_free=$((value * 1024));;
+    Buffers:) buffers=$((value * 1024));;
+    Cached:) cached=$((value * 1024));;
+    SReclaimable:) sreclaimable=$((value * 1024));;
+    Shmem:) shmem=$((value * 1024));;
+    SwapTotal:) swap_total=$((value * 1024));;
+    SwapFree:) swap_free=$((value * 1024));;
+  esac
+done < /proc/meminfo 2>/dev/null;
+mem_available=$((mem_free + buffers + cached + sreclaimable - shmem));
+[ "$mem_available" -lt 0 ] && mem_available=0;
+mem_used=$((mem_total - mem_available));
+swap_used=$((swap_total - swap_free));
+printf "MEM %s %s\n" "$mem_total" "$mem_used";
+printf "SWAP %s %s\n" "$swap_total" "$swap_used";
+read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat 2>/dev/null;
+total1=$((user + nice + system + idle + iowait + irq + softirq + steal)); idle1=$((idle + iowait));
+sleep 0.25;
+read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat 2>/dev/null;
+total2=$((user + nice + system + idle + iowait + irq + softirq + steal)); idle2=$((idle + iowait));
+dt=$((total2 - total1)); di=$((idle2 - idle1));
+if [ "$dt" -gt 0 ]; then awk -v dt="$dt" -v di="$di" "BEGIN { printf \"CPU %.1f\\n\", (100 * (dt - di)) / dt }"; fi;
+default_iface="";
+if [ -r /proc/net/route ]; then
+  while read -r iface dest _; do
+    [ "$dest" = "00000000" ] && { default_iface="$iface"; break; }
+  done < /proc/net/route;
+fi;
+best_iface=""; best_rx=0; best_tx=0; best_total=0;
+while IFS=: read -r iface data; do
+  set -- $data;
+  [ $# -ge 16 ] || continue;
+  iface=$(printf "%s" "$iface" | tr -d " ");
+  [ "$iface" = "lo" ] && continue;
+  rx=$1; tx=$9;
+  [ "$rx" -ge 0 ] 2>/dev/null || continue;
+  [ "$tx" -ge 0 ] 2>/dev/null || continue;
+  if [ "$iface" = "$default_iface" ]; then
+    printf "NET %s %s %s\n" "$iface" "$rx" "$tx";
+    best_iface="";
+    break;
+  fi;
+  total=$((rx + tx));
+  if [ "$total" -gt "$best_total" ]; then
+    best_iface="$iface"; best_rx=$rx; best_tx=$tx; best_total=$total;
+  fi;
+done < /proc/net/dev 2>/dev/null;
+[ -n "$best_iface" ] && printf "NET %s %s %s\n" "$best_iface" "$best_rx" "$best_tx";
+'"#;
+const TELEMETRY_IP_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
+public_ip="";
+if command -v curl >/dev/null 2>&1; then
+  public_ip=$(curl -4 -fsS --max-time 2 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 2 https://ifconfig.me/ip 2>/dev/null);
+fi;
+if [ -z "$public_ip" ] && command -v wget >/dev/null 2>&1; then
+  public_ip=$(wget -4 -qO- -T 2 https://api.ipify.org 2>/dev/null || wget -4 -qO- -T 2 https://ifconfig.me/ip 2>/dev/null);
+fi;
+case "$public_ip" in *[!0-9.]*|"") public_ip="";; esac;
+if [ -n "$public_ip" ]; then
+  printf "IP %s\n" "$public_ip";
+else
+  set -- $(hostname -I 2>/dev/null); [ -n "$1" ] && printf "IP %s\n" "$1";
+fi;
+'"#;
+const TELEMETRY_DISK_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
+df -B1 -P 2>/dev/null | while read -r fs total used avail pct mount; do
+  [ "$fs" = "Filesystem" ] && continue;
+  [ "$total" -gt 0 ] 2>/dev/null || continue;
+  printf "DISK %s %s %s\n" "$mount" "$used" "$total";
+done;
+'"#;
+const TELEMETRY_PROCESS_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
+ps -eo pid=,comm=,pcpu=,rss= --sort=-pcpu 2>/dev/null | sed -n "1,8p" | while read -r pid name cpu rss; do
+  [ "$pid" -gt 0 ] 2>/dev/null || continue;
+  mem_mb=$((rss / 1024));
+  printf "PROC %s %s %s %s\n" "$pid" "$name" "$cpu" "$mem_mb";
+done'"#;
+
+type RawSshHandle = client::Handle<RemoteClient>;
+pub type SshHandle = Arc<Mutex<RawSshHandle>>;
+type TerminalWriter = ChannelWriteHalf<client::Msg>;
+
+#[derive(Clone, Default)]
+pub struct RemoteRuntime {
+    connections: Arc<RwLock<HashMap<String, ConnectionRecord>>>,
+    terminals: Arc<RwLock<HashMap<String, TerminalRecord>>>,
+    sftp_sessions: Arc<RwLock<HashMap<String, SftpRecord>>>,
+    transfers: Arc<RwLock<HashMap<String, TransferRecord>>>,
+    telemetry_jobs: Arc<RwLock<HashMap<String, TelemetryJobRecord>>>,
+    forwards: Arc<RwLock<HashMap<String, ForwardRecord>>>,
+    connection_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionInfo {
+    pub connection_id: String,
+    pub session_id: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub status: RuntimeStatus,
+    pub connected_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInfo {
+    pub terminal_id: String,
+    pub connection_id: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub opened_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpInfo {
+    pub sftp_id: String,
+    pub connection_id: String,
+    pub opened_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileEntry {
+    pub key: String,
+    pub name: String,
+    pub path: String,
+    pub file_type: RemoteFileType,
+    pub size: u64,
+    pub modified_at: String,
+    pub permissions: String,
+    pub owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteFileType {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_status: Option<u32>,
+    pub duration_ms: u128,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferInfo {
+    pub transfer_id: String,
+    pub sftp_id: String,
+    pub direction: TransferDirection,
+    pub local_path: String,
+    pub remote_path: String,
+    pub status: TaskStatus,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub speed_kbps: f64,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryJobInfo {
+    pub job_id: String,
+    pub session_id: String,
+    pub interval_ms: u64,
+    pub status: TaskStatus,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTelemetry {
+    pub ip: String,
+    pub uptime: String,
+    pub cpu: f64,
+    pub memory: UsageMetric,
+    pub swap: UsageMetric,
+    pub processes: Vec<ProcessInfo>,
+    pub network: NetworkMetric,
+    pub disks: Vec<DiskMetric>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageMetric {
+    pub used: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub cpu: f64,
+    pub memory: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkMetric {
+    pub interface_name: String,
+    pub upload_kbps: f64,
+    pub download_kbps: f64,
+    pub latency_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskMetric {
+    pub mount: String,
+    pub used: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardInfo {
+    pub forward_id: String,
+    pub session_id: String,
+    pub forward_type: ForwardType,
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+    pub status: TaskStatus,
+    pub started_at: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeStatus {
+    Connecting,
+    Connected,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskStatus {
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Canceled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ForwardType {
+    Local,
+    Remote,
+    Dynamic,
+}
+
+#[derive(Clone)]
+struct ConnectionRecord {
+    info: ConnectionInfo,
+    handle: SshHandle,
+    remote_forwards: Arc<RwLock<HashMap<String, RemoteForwardTarget>>>,
+}
+
+#[derive(Clone)]
+struct TerminalRecord {
+    info: TerminalInfo,
+    writer: Arc<Mutex<TerminalWriter>>,
+}
+
+#[derive(Clone)]
+struct SftpRecord {
+    info: SftpInfo,
+    session: Arc<SftpSession>,
+    transfer_sessions: Vec<Arc<SftpSession>>,
+    transfer_cursor: Arc<Mutex<usize>>,
+    transfer_slots: Arc<Semaphore>,
+}
+
+impl SftpRecord {
+    async fn next_transfer_session(&self) -> Arc<SftpSession> {
+        if self.transfer_sessions.is_empty() {
+            return self.session.clone();
+        }
+        let mut cursor = self.transfer_cursor.lock().await;
+        let index = *cursor % self.transfer_sessions.len();
+        *cursor = cursor.wrapping_add(1);
+        self.transfer_sessions[index].clone()
+    }
+}
+
+struct TransferRecord {
+    info: TransferInfo,
+    request: TransferRequest,
+    cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+struct TelemetryJobRecord {
+    info: TelemetryJobInfo,
+    handle: JoinHandle<()>,
+}
+
+struct ParsedTelemetry {
+    output: String,
+    snapshot: ServerTelemetry,
+    network_bytes: Option<NetworkBytes>,
+}
+
+#[derive(Clone)]
+struct NetworkBytes {
+    interface_name: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+struct ForwardRecord {
+    info: ForwardInfo,
+    handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct TransferRequest {
+    sftp_id: String,
+    direction: TransferDirection,
+    local_path: String,
+    remote_path: String,
+    overwrite: bool,
+    accelerated: bool,
+    resume: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteForwardTarget {
+    local_host: String,
+    local_port: u16,
+}
+
+#[derive(Clone)]
+pub struct RemoteClient {
+    verification: HostKeyVerification,
+    trusted: Option<KnownHostEntry>,
+    observed: Arc<StdMutex<Option<HostKeyVerification>>>,
+    remote_forwards: Arc<RwLock<HashMap<String, RemoteForwardTarget>>>,
+}
+
+impl Handler for RemoteClient {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let fingerprint = format!(
+            "{}",
+            server_public_key.fingerprint(ssh_key::HashAlg::Sha256)
+        );
+        let algorithm = server_public_key.algorithm().to_string();
+        let mut observed = self.verification.clone();
+        observed.algorithm = algorithm;
+        observed.fingerprint = fingerprint.clone();
+        observed.expected_fingerprint =
+            self.trusted.as_ref().map(|entry| entry.fingerprint.clone());
+        if let Ok(mut guard) = self.observed.lock() {
+            *guard = Some(observed);
+        }
+
+        Ok(self
+            .trusted
+            .as_ref()
+            .is_some_and(|entry| entry.fingerprint == fingerprint))
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let key = forward_key(connected_address, connected_port as u16);
+        let target = self.remote_forwards.read().await.get(&key).cloned();
+        match target {
+            Some(target) => {
+                tokio::spawn(async move {
+                    if let Ok(mut local) =
+                        TcpStream::connect((target.local_host.as_str(), target.local_port)).await
+                    {
+                        let mut remote = channel.into_stream();
+                        let _ = io::copy_bidirectional(&mut local, &mut remote).await;
+                    } else {
+                        let _ = channel.close().await;
+                    }
+                });
+            }
+            None => {
+                let _ = channel.close().await;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn forward_key(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_linux_telemetry_output() {
+        let output = "\
+UPTIME 90061
+MEM 4096 1024
+SWAP 2048 128
+CPU 12.5
+IP 10.0.0.5
+DISK / 100 200
+PROC 42 sshd 1.5 20.0
+";
+        let telemetry = parse_linux_telemetry(output, "127.0.0.1", 33);
+        assert_eq!(telemetry.ip, "10.0.0.5");
+        assert_eq!(telemetry.uptime, "1 天 1 小时");
+        assert_eq!(telemetry.memory.used, 1024);
+        assert_eq!(telemetry.memory.total, 4096);
+        assert_eq!(telemetry.cpu, 12.5);
+        assert_eq!(telemetry.disks[0].mount, "/");
+        assert_eq!(telemetry.processes[0].pid, 42);
+        assert_eq!(telemetry.network.latency_ms, 33);
+    }
+
+    #[test]
+    fn ignores_invalid_telemetry_rows() {
+        let output = "\
+DISK / 0 0
+PROC 0 process 0 0
+PROC 42 sshd 1.5 20.0
+";
+        let telemetry = parse_linux_telemetry(output, "127.0.0.1", 0);
+        assert!(telemetry.disks.is_empty());
+        assert_eq!(telemetry.processes.len(), 1);
+        assert_eq!(telemetry.processes[0].pid, 42);
+    }
+
+    #[test]
+    fn telemetry_base_command_keeps_outer_shell_quote_intact() {
+        assert_eq!(TELEMETRY_BASE_COMMAND.matches('\'').count(), 2);
+        assert!(TELEMETRY_BASE_COMMAND.contains("awk -v dt="));
+    }
+
+    #[test]
+    fn normalizes_and_joins_remote_paths() {
+        assert_eq!(normalize_remote_path("tmp//app/"), "/tmp/app");
+        assert_eq!(join_remote_path("/", "var"), "/var");
+        assert_eq!(join_remote_path("/tmp", "app.log"), "/tmp/app.log");
+    }
+
+    #[test]
+    fn shell_quotes_find_arguments() {
+        assert_eq!(shell_quote("/tmp/it's here"), "'/tmp/it'\\''s here'");
+        assert_eq!(
+            build_remote_find_command("/tmp/app", "log'2026"),
+            "command -v find >/dev/null 2>&1 && find '/tmp/app' -iname '*log'\\''2026*' -print -quit 2>/dev/null"
+        );
+    }
+
+    #[test]
+    fn protects_root_and_child_directory_targets() {
+        assert!(ensure_not_root_path("/", "不能删除根目录").is_err());
+        assert!(ensure_not_root_path("/tmp", "不能删除根目录").is_ok());
+        assert!(is_same_or_child_remote_path("/tmp/app", "/tmp/app"));
+        assert!(is_same_or_child_remote_path("/tmp/app", "/tmp/app/logs"));
+        assert!(!is_same_or_child_remote_path("/tmp/app", "/tmp/app2/logs"));
+        assert!(ensure_not_same_or_child_path("/tmp/app", "/tmp/app/logs", "bad").is_err());
+        assert!(ensure_not_same_or_child_path("/tmp/app", "/tmp/backup/app", "bad").is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_runtime_has_no_stale_handles() {
+        let runtime = RemoteRuntime::default();
+        assert!(runtime.ensure_no_stale_handles().await);
+    }
+
+    #[tokio::test]
+    async fn connects_through_socks5_proxy_without_auth() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0u8; 3];
+            socket.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting, [5, 1, 0]);
+            socket.write_all(&[5, 0]).await.unwrap();
+
+            let mut head = [0u8; 5];
+            socket.read_exact(&mut head).await.unwrap();
+            assert_eq!(&head[..4], &[5, 1, 0, 3]);
+            let mut host = vec![0u8; head[4] as usize];
+            socket.read_exact(&mut host).await.unwrap();
+            let mut port = [0u8; 2];
+            socket.read_exact(&mut port).await.unwrap();
+            assert_eq!(String::from_utf8(host).unwrap(), "example.com");
+            assert_eq!(u16::from_be_bytes(port), 22);
+
+            socket
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0x30, 0x39])
+                .await
+                .unwrap();
+        });
+
+        let proxy = SshProxyOptions {
+            kind: "socks5".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: proxy_port,
+        };
+        let stream = connect_via_socks5(&proxy, "example.com", 22).await;
+        assert!(stream.is_ok());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_socks5_connect_failure() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0u8; 3];
+            socket.read_exact(&mut greeting).await.unwrap();
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut request = [0u8; 18];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(&[5, 5, 0, 1, 127, 0, 0, 1, 0, 0])
+                .await
+                .unwrap();
+        });
+
+        let proxy = SshProxyOptions {
+            kind: "socks5".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: proxy_port,
+        };
+        assert!(connect_via_socks5(&proxy, "example.com", 22).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn connects_through_http_connect_proxy() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_header(&mut socket).await.unwrap();
+            assert!(request.starts_with("CONNECT example.com:22 HTTP/1.1"));
+            socket
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let proxy = SshProxyOptions {
+            kind: "httpConnect".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: proxy_port,
+        };
+        let stream = connect_via_http_connect(&proxy, "example.com", 22).await;
+        assert!(stream.is_ok());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_http_connect_failure() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_http_header(&mut socket).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let proxy = SshProxyOptions {
+            kind: "httpConnect".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: proxy_port,
+        };
+        assert!(connect_via_http_connect(&proxy, "example.com", 22)
+            .await
+            .is_err());
+    }
+}

@@ -1,0 +1,87 @@
+import { theme, type ThemeConfig } from "antd";
+
+export const appTheme: ThemeConfig = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: "#3b82f6",
+    colorBgBase: "#f4f7fa",
+    colorBgContainer: "#ffffff",
+    colorBgElevated: "#ffffff",
+    colorBorder: "#e2e8f0",
+    colorBorderSecondary: "#f1f5f9",
+    colorText: "#0f172a",
+    colorTextSecondary: "#475569",
+    colorTextTertiary: "#94a3b8",
+    colorTextDescription: "#64748b",
+    colorTextPlaceholder: "#94a3b8",
+    colorSplit: "#f1f5f9",
+    borderRadius: 8,
+    borderRadiusSM: 6,
+    borderRadiusLG: 12,
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontSize: 14,
+    lineHeight: 1.6,
+    controlHeight: 32,
+    controlHeightSM: 28,
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)",
+    boxShadowSecondary: "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
+  },
+  components: {
+    Table: {
+      headerBg: "#f8fafc",
+      headerColor: "#0f172a",
+      headerSplitColor: "#f1f5f9",
+      rowHoverBg: "#f1f5f9",
+      borderColor: "#f1f5f9",
+      fontSize: 13,
+    },
+    Tabs: {
+      cardBg: "transparent",
+      itemColor: "#64748b",
+      itemActiveColor: "#3b82f6",
+      itemSelectedColor: "#3b82f6",
+      itemHoverColor: "#3b82f6",
+      inkBarColor: "#3b82f6",
+      horizontalItemPadding: "12px 16px",
+    },
+    Input: {
+      colorBgContainer: "#ffffff",
+      activeBorderColor: "#3b82f6",
+      hoverBorderColor: "#93c5fd",
+      paddingInline: 12,
+    },
+    Button: {
+      defaultBg: "#ffffff",
+      defaultBorderColor: "#e2e8f0",
+      defaultColor: "#475569",
+      fontWeight: 500,
+      paddingInlineSM: 12,
+    },
+    Progress: {
+      remainingColor: "#f1f5f9",
+    },
+    Tree: {
+      nodeSelectedBg: "#eff6ff",
+      nodeHoverBg: "#f8fafc",
+      colorText: "#475569",
+      fontSize: 13,
+    },
+    Breadcrumb: {
+      itemColor: "#64748b",
+      linkColor: "#64748b",
+      linkHoverColor: "#3b82f6",
+      separatorColor: "#94a3b8",
+      fontSize: 12,
+    },
+    Modal: {
+      headerBg: "#ffffff",
+      contentBg: "#ffffff",
+      footerBg: "#ffffff",
+      borderRadiusLG: 12,
+    },
+    Alert: {
+      borderRadiusLG: 8,
+    },
+  },
+};
+

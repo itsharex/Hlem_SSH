@@ -1,0 +1,1240 @@
+/* ─── Modal 通用美化 ────────────────────────────────────────────────────── */
+.settingsModal .ant-modal-content,
+.tunnelModal .ant-modal-content,
+.tunnelConfigModal .ant-modal-content,
+.backupModal .ant-modal-content,
+.fileEditorModal .ant-modal-content,
+.sessionListModal .ant-modal-content {
+  border: 1px solid rgba(232, 238, 246, .9) !important;
+  border-radius: var(--radius-xl) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  box-shadow:
+    0 32px 64px -16px rgba(15, 23, 42, .25),
+    0 12px 24px -10px rgba(99, 102, 241, .2),
+    inset 0 1px 0 rgba(255, 255, 255, .9) !important;
+  overflow: hidden;
+  position: relative;
+}
+
+.settingsModal .ant-modal-content::before,
+.tunnelModal .ant-modal-content::before,
+.tunnelConfigModal .ant-modal-content::before,
+.backupModal .ant-modal-content::before,
+.fileEditorModal .ant-modal-content::before,
+.sessionListModal .ant-modal-content::before {
+  content: none;
+  display: none;
+}
+
+.settingsModal .ant-modal-content::after,
+.tunnelModal .ant-modal-content::after,
+.tunnelConfigModal .ant-modal-content::after,
+.backupModal .ant-modal-content::after,
+.fileEditorModal .ant-modal-content::after,
+.sessionListModal .ant-modal-content::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 4px;
+  height: 80px;
+  background: radial-gradient(600px 200px at 50% 0%, rgba(99, 102, 241, .08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.settingsModal .ant-modal-header {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(241, 245, 249, .8);
+  background: transparent !important;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsModal .ant-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: .2px;
+  background: linear-gradient(135deg, #1e293b 0%, #3b82f6 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.settingsModal .ant-modal-body {
+  padding-top: 2px;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsModal .ant-modal-footer {
+  margin-top: 18px;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsPanel {
+  position: relative;
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(232, 238, 246, .9);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+  transition: box-shadow .2s, border-color .2s;
+  overflow: hidden;
+}
+
+.settingsPanel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(360px 120px at 0 0, rgba(99, 102, 241, .05) 0%, transparent 60%),
+    radial-gradient(280px 120px at 100% 100%, rgba(139, 92, 246, .045) 0%, transparent 60%);
+  opacity: .85;
+}
+
+.settingsPanel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.settingsPanel:hover {
+  border-color: rgba(99, 102, 241, .25);
+  box-shadow: 0 8px 18px -10px rgba(99, 102, 241, .25);
+}
+
+.settingsSectionTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.settingsSectionTitle::before {
+  content: none;
+  display: none;
+}
+
+.settingsShortcutGrid {
+  margin-top: 14px;
+  gap: 12px;
+}
+
+.settingsShortcutGrid .ant-btn {
+  position: relative;
+  height: 56px !important;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  border: 1px solid rgba(232, 238, 246, .9) !important;
+  border-radius: var(--radius) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  color: var(--text-primary) !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+  overflow: hidden;
+}
+
+.settingsShortcutGrid .ant-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .05) 0%, rgba(139, 92, 246, .04) 100%);
+  opacity: 0;
+  transition: opacity .22s;
+  pointer-events: none;
+}
+
+.settingsShortcutGrid .ant-btn .ant-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-right: 12px !important;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .12) 0%, rgba(139, 92, 246, .12) 100%);
+  color: var(--accent-2);
+  font-size: 16px;
+  transition: all .25s cubic-bezier(.4, 0, .2, 1);
+  flex: 0 0 36px;
+}
+
+.settingsShortcutGrid .ant-btn:hover,
+.settingsShortcutGrid .ant-btn:focus {
+  border-color: rgba(99, 102, 241, .45) !important;
+  color: var(--accent) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -10px rgba(99, 102, 241, .35) !important;
+}
+
+.settingsShortcutGrid .ant-btn:hover::before {
+  opacity: 1;
+}
+
+.settingsShortcutGrid .ant-btn:hover .ant-btn-icon {
+  background: var(--accent-grad);
+  color: #ffffff;
+  transform: scale(1.06) rotate(-3deg);
+  box-shadow: 0 6px 14px -2px rgba(99, 102, 241, .5);
+}
+
+.settingsShortcutGrid .ant-btn:active {
+  transform: translateY(0);
+}
+
+.settingsProxyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed rgba(99, 102, 241, .18);
+}
+
+.settingsProxyHeader .ant-switch {
+  min-width: 44px;
+  height: 22px;
+  background: rgba(148, 163, 184, .35) !important;
+}
+
+.settingsProxyHeader .ant-switch-checked {
+  background: var(--accent-grad) !important;
+  box-shadow: 0 4px 12px -2px rgba(99, 102, 241, .45);
+}
+
+.settingsProxyForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 14px;
+}
+
+.settingsProxyForm .ant-form-item {
+  margin-bottom: 0;
+}
+
+.settingsProxyForm .ant-form-item:first-child {
+  grid-column: 1 / -1;
+}
+
+.settingsProxyForm .ant-form-item-label > label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .2px;
+}
+
+.settingsProxyForm .ant-input,
+.settingsProxyForm .ant-input-number,
+.settingsProxyForm .ant-select-selector {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.settingsProxyForm .ant-input:not([disabled]):hover,
+.settingsProxyForm .ant-input-number:not(.ant-input-number-disabled):hover,
+.settingsProxyForm .ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: #ffffff !important;
+}
+
+.settingsProxyForm .ant-input:focus,
+.settingsProxyForm .ant-input-number-focused,
+.settingsProxyForm .ant-select-focused .ant-select-selector {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+  background: #ffffff !important;
+}
+
+.settingsProxyForm .ant-input[disabled],
+.settingsProxyForm .ant-input-number-disabled,
+.settingsProxyForm .ant-select-disabled .ant-select-selector {
+  background: rgba(244, 247, 252, .6) !important;
+  color: var(--text-muted) !important;
+  cursor: not-allowed;
+}
+
+/* —— SettingsModal 底部按钮：更精致 —— */
+.settingsModal .ant-modal-footer .ant-btn {
+  height: 36px;
+  padding: 0 22px;
+  border-radius: var(--radius) !important;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.settingsModal .ant-modal-footer .ant-btn-default {
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .9) !important;
+  color: var(--text-secondary) !important;
+}
+
+.settingsModal .ant-modal-footer .ant-btn-default:hover {
+  border-color: rgba(99, 102, 241, .35) !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+  transform: translateY(-1px);
+}
+
+.settingsModal .ant-modal-footer .ant-btn-primary {
+  border: 0 !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.settingsModal .ant-modal-footer .ant-btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 10px 22px -6px rgba(99, 102, 241, .6) !important;
+}
+
+.settingsModal .ant-modal-footer .ant-btn:active {
+  transform: translateY(0);
+}
+
+.tunnelModal .ant-modal-header,
+.tunnelConfigModal .ant-modal-header,
+.backupModal .ant-modal-header {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(241, 245, 249, .8);
+  background: transparent !important;
+  position: relative;
+  z-index: 1;
+}
+
+.tunnelModal .ant-modal-title,
+.tunnelConfigModal .ant-modal-title,
+.backupModal .ant-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: .2px;
+  background: linear-gradient(135deg, #1e293b 0%, #3b82f6 70%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.tunnelModal .ant-modal-body,
+.tunnelConfigModal .ant-modal-body,
+.backupModal .ant-modal-body {
+  position: relative;
+  z-index: 1;
+}
+
+.tunnelModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(99, 102, 241, .06) 0%, rgba(139, 92, 246, .05) 100%);
+  border: 1px solid rgba(99, 102, 241, .15);
+}
+
+.tunnelModalHeader .settingsSectionTitle {
+  font-size: 14px;
+}
+
+.tunnelModalHeader .ant-btn-primary {
+  height: 32px;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: var(--radius) !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  box-shadow: 0 6px 14px -4px rgba(99, 102, 241, .5) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.tunnelModalHeader .ant-btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 10px 20px -4px rgba(99, 102, 241, .6) !important;
+}
+
+.tunnelModalHeader .ant-btn-primary:active {
+  transform: translateY(0);
+}
+
+.tunnelModal .drawerSubTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 12px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: .2px;
+}
+
+.tunnelModal .drawerSubTitle::before {
+  content: none;
+  display: none;
+}
+
+.tunnelModal .ant-table-wrapper,
+.backupModal .ant-table-wrapper {
+  border: 1px solid rgba(232, 238, 246, .9);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: rgba(255, 255, 255, .65);
+  backdrop-filter: blur(2px);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+}
+
+.tunnelModal .ant-table-thead > tr > th,
+.backupModal .ant-table-thead > tr > th,
+.tunnelConfigModal .ant-table-thead > tr > th {
+  background: linear-gradient(180deg, rgba(248, 250, 252, .96) 0%, rgba(241, 245, 249, .96) 100%) !important;
+  border-bottom: 1px solid rgba(232, 238, 246, .8) !important;
+  font-size: 11px !important;
+  letter-spacing: .5px !important;
+}
+
+.tunnelModal .ant-empty-normal,
+.backupModal .ant-empty-normal {
+  margin-block: 24px;
+  color: var(--text-muted);
+}
+
+/* ─── 隧道配置 Modal（新建/编辑隧道）─────────────────────────────────────── */
+.tunnelConfigModal .ant-modal-body {
+  padding-top: 4px;
+}
+
+.tunnelConfigModal .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.tunnelConfigModal .ant-form-item-label > label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .2px;
+}
+
+.tunnelConfigModal .ant-input,
+.tunnelConfigModal .ant-input-number,
+.tunnelConfigModal .ant-select-selector {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.tunnelConfigModal .ant-input:hover,
+.tunnelConfigModal .ant-input-number:not(.ant-input-number-disabled):hover,
+.tunnelConfigModal .ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: #ffffff !important;
+}
+
+.tunnelConfigModal .ant-input:focus,
+.tunnelConfigModal .ant-input-number-focused,
+.tunnelConfigModal .ant-select-focused .ant-select-selector {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+  background: #ffffff !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn,
+.tunnelModal .ant-modal-footer .ant-btn,
+.backupModal .ant-modal-footer .ant-btn {
+  height: 36px;
+  padding: 0 22px;
+  border-radius: var(--radius) !important;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-default,
+.tunnelModal .ant-modal-footer .ant-btn-default,
+.backupModal .ant-modal-footer .ant-btn-default {
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .9) !important;
+  color: var(--text-secondary) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-default:hover,
+.tunnelModal .ant-modal-footer .ant-btn-default:hover,
+.backupModal .ant-modal-footer .ant-btn-default:hover {
+  border-color: rgba(99, 102, 241, .35) !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+  transform: translateY(-1px);
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-primary,
+.tunnelModal .ant-modal-footer .ant-btn-primary,
+.backupModal .ant-modal-footer .ant-btn-primary {
+  border: 0 !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-primary:hover,
+.tunnelModal .ant-modal-footer .ant-btn-primary:hover,
+.backupModal .ant-modal-footer .ant-btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 10px 22px -6px rgba(99, 102, 241, .6) !important;
+}
+
+/* ─── 备份 Modal 子区段 ─────────────────────────────────────────────────── */
+.backupPanel {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(232, 238, 246, .9);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+  contain: paint;
+  transition: border-color .16s ease, box-shadow .16s ease;
+  overflow: hidden;
+}
+
+.backupPanel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(360px 120px at 0 0, rgba(99, 102, 241, .05) 0%, transparent 60%),
+    radial-gradient(280px 120px at 100% 100%, rgba(139, 92, 246, .045) 0%, transparent 60%);
+  opacity: .85;
+}
+
+.backupPanel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.backupPanel:hover {
+  border-color: rgba(99, 102, 241, .25);
+  box-shadow: 0 2px 6px -4px rgba(99, 102, 241, .18);
+}
+
+.backupSimpleLayout {
+  display: grid;
+  gap: 14px;
+  max-height: min(680px, calc(100vh - 220px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0;
+  scrollbar-gutter: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.backupSimpleLayout::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.backupPanel-actions {
+  grid-template-columns: 1fr;
+}
+
+.backupSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(99, 102, 241, .18);
+}
+
+.backupSectionHeader > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.backupSectionHeader > span:first-child::before {
+  content: none;
+  display: none;
+}
+
+.backupSectionHeader .ant-btn-sm {
+  height: 28px;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  box-shadow: 0 4px 10px -2px rgba(99, 102, 241, .45) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.backupSectionHeader .ant-btn-sm:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 8px 16px -4px rgba(99, 102, 241, .55) !important;
+}
+
+.backupSectionHeader .ant-tag {
+  margin: 0 !important;
+  padding: 1px 10px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .12) 0%, rgba(139, 92, 246, .12) 100%) !important;
+  border: 1px solid rgba(99, 102, 241, .2) !important;
+  color: var(--accent-2) !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+}
+
+.backupFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.backupActionGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.backupActionGrid .ant-btn {
+  position: relative;
+  height: 50px !important;
+  border-radius: var(--radius) !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+  overflow: hidden;
+}
+
+.backupActionGrid .ant-btn .ant-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 8px !important;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .12) 0%, rgba(139, 92, 246, .12) 100%);
+  color: var(--accent-2);
+  font-size: 14px;
+  transition: all .25s cubic-bezier(.4, 0, .2, 1);
+  flex: 0 0 28px;
+}
+
+.backupActionGrid .ant-btn:hover {
+  border-color: rgba(99, 102, 241, .4) !important;
+  color: var(--accent) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 22px -8px rgba(99, 102, 241, .35) !important;
+}
+
+.backupActionGrid .ant-btn:hover .ant-btn-icon {
+  background: var(--accent-grad);
+  color: #ffffff;
+  transform: scale(1.06) rotate(-3deg);
+  box-shadow: 0 5px 12px -2px rgba(99, 102, 241, .5);
+}
+
+.backupActionGrid .ant-btn-primary {
+  border: 0 !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 14px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.backupActionGrid .ant-btn-primary .ant-btn-icon {
+  background: rgba(255, 255, 255, .25) !important;
+  color: #ffffff !important;
+}
+
+.backupActionGrid .ant-btn-primary:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 10px 20px -4px rgba(99, 102, 241, .6) !important;
+}
+
+.backupActionGrid .ant-btn-primary:hover .ant-btn-icon {
+  background: rgba(255, 255, 255, .35) !important;
+  color: #ffffff !important;
+  transform: scale(1.08);
+}
+
+.backupActionGrid .ant-btn-dangerous {
+  border: 1px solid rgba(239, 68, 68, .35) !important;
+  color: #b91c1c !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fff5f5 100%) !important;
+}
+
+.backupActionGrid .ant-btn-dangerous .ant-btn-icon {
+  background: linear-gradient(135deg, rgba(239, 68, 68, .14) 0%, rgba(249, 115, 22, .12) 100%);
+  color: var(--danger);
+}
+
+.backupActionGrid .ant-btn-dangerous:hover {
+  border-color: rgba(239, 68, 68, .55) !important;
+  color: #ffffff !important;
+  background: var(--danger-grad) !important;
+  box-shadow: 0 12px 22px -8px rgba(239, 68, 68, .4) !important;
+}
+
+.backupActionGrid .ant-btn-dangerous:hover .ant-btn-icon {
+  background: rgba(255, 255, 255, .25);
+  color: #ffffff;
+}
+
+.backupFormGrid-tight {
+  grid-template-columns: 110px repeat(3, minmax(0, 1fr));
+}
+
+.backupCloudHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.backupModal .ant-form-item {
+  margin-bottom: 0;
+}
+
+.backupModal .ant-form-item-label {
+  padding-bottom: 6px;
+}
+
+.backupModal .ant-form-item-label > label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+
+.backupModal .ant-input,
+.backupModal .ant-input-number,
+.backupModal .ant-select-selector,
+.backupModal .ant-input-affix-wrapper {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.backupModal .ant-input:hover,
+.backupModal .ant-input-number:not(.ant-input-number-disabled):hover,
+.backupModal .ant-select:not(.ant-select-disabled):hover .ant-select-selector,
+.backupModal .ant-input-affix-wrapper:hover {
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: #ffffff !important;
+}
+
+.backupModal .ant-input:focus,
+.backupModal .ant-input-number-focused,
+.backupModal .ant-select-focused .ant-select-selector,
+.backupModal .ant-input-affix-wrapper-focused {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+  background: #ffffff !important;
+}
+
+.backupModal .ant-input-affix-wrapper > input.ant-input {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+.backupModal .ant-input-affix-wrapper > input.ant-input:hover,
+.backupModal .ant-input-affix-wrapper > input.ant-input:focus {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.backupDirectoryPicker {
+  display: flex !important;
+  align-items: stretch;
+}
+
+.backupDirectoryPicker .ant-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  border-right: 0 !important;
+  border-start-end-radius: 0 !important;
+  border-end-end-radius: 0 !important;
+}
+
+.backupDirectoryPicker .ant-input:hover,
+.backupDirectoryPicker .ant-input:focus {
+  border-right: 0 !important;
+}
+
+.backupDirectoryPicker .ant-btn {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 38px !important;
+  border-color: rgba(221, 230, 241, .9) !important;
+  border-left: 0 !important;
+  border-start-start-radius: 0 !important;
+  border-end-start-radius: 0 !important;
+  border-start-end-radius: var(--radius) !important;
+  border-end-end-radius: var(--radius) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+.backupDirectoryPicker:focus-within .ant-input,
+.backupDirectoryPicker:focus-within .ant-btn {
+  border-color: var(--accent) !important;
+}
+
+.backupDirectoryPicker:focus-within {
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15);
+}
+
+.backupDirectoryPicker:focus-within .ant-input {
+  box-shadow: none !important;
+}
+
+.backupDirectoryPicker .ant-btn:hover,
+.backupDirectoryPicker .ant-btn:focus-visible {
+  color: var(--accent) !important;
+  background: #ffffff !important;
+}
+
+.backupModal .ant-segmented {
+  background: rgba(99, 102, 241, .06) !important;
+  border: 1px solid rgba(99, 102, 241, .15);
+  border-radius: 10px !important;
+  padding: 3px !important;
+}
+
+.backupModal .ant-segmented .ant-segmented-item {
+  border-radius: 7px !important;
+  transition: all .18s cubic-bezier(.4, 0, .2, 1);
+}
+
+.backupModal .ant-segmented .ant-segmented-item-selected {
+  background: #ffffff !important;
+  box-shadow: 0 4px 10px -2px rgba(99, 102, 241, .25), 0 0 0 1px rgba(99, 102, 241, .2) !important;
+}
+
+.backupModal .ant-segmented .ant-segmented-item-selected .ant-segmented-item-label {
+  color: var(--accent) !important;
+  font-weight: 700;
+}
+
+.backupModal .ant-segmented .ant-segmented-item:not(.ant-segmented-item-selected):hover {
+  color: var(--accent);
+}
+
+.backupModal .ant-switch {
+  min-width: 44px;
+  height: 22px;
+  background: rgba(148, 163, 184, .35) !important;
+}
+
+.backupModal .ant-switch-checked {
+  background: var(--accent-grad) !important;
+  box-shadow: 0 4px 12px -2px rgba(99, 102, 241, .45);
+}
+
+.backupModal .ant-table-body,
+.backupModal .ant-table-content {
+  scrollbar-width: thin;
+}
+
+.backupModal .ant-table-body::-webkit-scrollbar,
+.backupModal .ant-table-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.backupModal .ant-table-body::-webkit-scrollbar-thumb,
+.backupModal .ant-table-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(99, 102, 241, .25);
+}
+
+.helm-modal-motion-appear,
+.helm-modal-motion-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.helm-modal-motion-appear-active,
+.helm-modal-motion-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 180ms cubic-bezier(.22, 1, .36, 1),
+    transform 180ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.helm-modal-motion-leave {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.helm-modal-motion-leave-active {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 140ms cubic-bezier(.4, 0, .2, 1),
+    transform 140ms cubic-bezier(.4, 0, .2, 1);
+}
+
+.helm-mask-motion-appear,
+.helm-mask-motion-enter {
+  opacity: 0;
+}
+
+.helm-mask-motion-appear-active,
+.helm-mask-motion-enter-active {
+  opacity: 1;
+  transition: opacity 180ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.helm-mask-motion-leave {
+  opacity: 1;
+}
+
+.helm-mask-motion-leave-active {
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(.4, 0, .2, 1);
+}
+
+.sessionListModal .ant-modal-content {
+  border: 1px solid rgba(99, 102, 241, .12);
+  border-radius: 18px !important;
+  box-shadow:
+    0 32px 64px -16px rgba(15, 23, 42, .25),
+    0 12px 24px -10px rgba(99, 102, 241, .25),
+    inset 0 1px 0 rgba(255, 255, 255, .9) !important;
+  overflow: hidden;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+}
+
+.sessionListModal .ant-modal-header {
+  padding: 22px 64px 14px 26px;
+  margin: 0;
+  border-bottom: 1px solid rgba(241, 245, 249, .8);
+  background: linear-gradient(180deg,
+    rgba(238, 242, 255, .55) 0%,
+    rgba(243, 244, 255, .35) 60%,
+    transparent 100%) !important;
+  position: relative;
+}
+
+.sessionListModal .ant-modal-header::after {
+  content: none;
+  display: none;
+}
+
+.sessionListModal .ant-modal-title {
+  padding: 0 !important;
+}
+
+.sessionListModal .ant-modal-body {
+  padding: 18px 22px 22px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f4f7fc 100%);
+}
+
+.sessionListModal .ant-modal-close {
+  top: 16px !important;
+  right: 18px !important;
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, .7) !important;
+  border: 1px solid rgba(232, 238, 246, .6) !important;
+  backdrop-filter: blur(6px);
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.sessionListModal .ant-modal-close:hover {
+  background: rgba(239, 68, 68, .1) !important;
+  border-color: rgba(239, 68, 68, .35) !important;
+  color: var(--danger) !important;
+  transform: rotate(90deg);
+}
+
+.sessionListModalTitleBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.sessionListModalTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sessionListModalTitle::before {
+  content: none;
+  display: none;
+}
+
+.sessionListModalTitle span {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: .3px;
+  background: linear-gradient(135deg, #1e293b 0%, #3b82f6 70%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sessionListModalTitle small {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .12) 0%, rgba(139, 92, 246, .12) 100%);
+  border: 1px solid rgba(99, 102, 241, .2);
+  color: var(--accent-2);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  white-space: nowrap;
+}
+
+.sessionListModalAdd {
+  width: 36px !important;
+  height: 36px !important;
+  flex: 0 0 auto;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: var(--accent-grad) !important;
+  box-shadow:
+    0 8px 20px -4px rgba(99, 102, 241, .55),
+    inset 0 1px 0 rgba(255, 255, 255, .3) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.sessionListModalAdd::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .25) 0%, rgba(255, 255, 255, 0) 60%);
+  pointer-events: none;
+}
+
+.sessionListModalAdd .anticon {
+  font-size: 16px !important;
+  color: #ffffff !important;
+  position: relative;
+  z-index: 1;
+  transition: transform .25s cubic-bezier(.4, 0, .2, 1);
+}
+
+.sessionListModalAdd:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow:
+    0 14px 28px -6px rgba(99, 102, 241, .65),
+    inset 0 1px 0 rgba(255, 255, 255, .4) !important;
+  filter: brightness(1.08);
+}
+
+.sessionListModalAdd:hover .anticon {
+  transform: rotate(90deg) scale(1.1);
+}
+
+.sessionListModalAdd:active {
+  transform: translateY(0) scale(.98);
+  box-shadow: 0 4px 10px -2px rgba(99, 102, 241, .5) !important;
+}
+
+.sessionListModalAdd:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, .4);
+  outline-offset: 3px;
+}
+
+.sessionListModalBody {
+  display: grid;
+  gap: 10px;
+  padding-right: 2px;
+  margin-bottom: 4px;
+}
+
+.sessionListModalPager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed rgba(99, 102, 241, .2);
+}
+
+.sessionListModalPager .ant-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px !important;
+  border: 1px solid rgba(232, 238, 246, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.sessionListModalPager .ant-btn:not(:disabled):hover {
+  border-color: rgba(99, 102, 241, .45) !important;
+  color: var(--accent) !important;
+  background: linear-gradient(135deg, #ffffff 0%, var(--accent-light) 100%) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px -4px rgba(99, 102, 241, .3) !important;
+}
+
+.sessionListModalPager .ant-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.sessionListModalPagerInfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 60px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .1) 0%, rgba(139, 92, 246, .1) 100%);
+  border: 1px solid rgba(99, 102, 241, .18);
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionListModalPagerInfo strong {
+  background: var(--accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 900;
+  font-size: 15px;
+}
+
+.sessionListModalPagerInfo em {
+  color: var(--text-muted);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.sessionListModalPagerInfo span {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.sessionListModalItem {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid #e8eef6;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color .18s, background .18s, box-shadow .18s;
+}
+
+.sessionListModalItem > .stateDot {
+  justify-self: center;
+}
+
+.sessionListModalItem:hover,
+.sessionListModalItem:focus-visible {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, .08);
+  outline: none;
+}
+
+.sessionListModalItem-active {
+  border-color: rgba(59, 130, 246, .45);
+  background: #eff6ff;
+}
+
+.sessionListModalText {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 0;
+  text-align: center;
+}
+
+.sessionListModalText strong,
+.sessionListModalText span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionListModalText strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sessionListModalText span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sessionListModalActions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.sessionListModalActions .ant-btn {
+  border-color: #e2e8f0 !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+

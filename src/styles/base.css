@@ -1,0 +1,87 @@
+/* ─── Reset & Base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+button { font: inherit; cursor: pointer; }
+
+.bootScreen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  background: var(--bg-base);
+}
+
+.bootMark {
+  width: 38px;
+  height: 38px;
+  display: block;
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.24);
+}
+
+.bootScreen > div:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.bootScreen strong {
+  font-size: 16px;
+  line-height: 20px;
+}
+
+.bootScreen span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.appPlaceholder,
+.appLoadingFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.appLoadingFallback .bootMark {
+  width: 32px;
+  height: 32px;
+  box-shadow: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+

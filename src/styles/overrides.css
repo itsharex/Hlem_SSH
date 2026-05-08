@@ -1,0 +1,659 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   全局补强：滚动条、Tooltip、按钮反馈、TransferPanel、保存按钮等
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.transferDrawer .ant-drawer-body,
+.sessionConfigModal .ant-modal-body,
+.quickCommandScrollList {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .35) transparent;
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar,
+.sessionConfigModal .ant-modal-body::-webkit-scrollbar,
+.quickCommandScrollList::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar-thumb,
+.sessionConfigModal .ant-modal-body::-webkit-scrollbar-thumb,
+.quickCommandScrollList::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(148, 163, 184, .35) 0%, rgba(99, 102, 241, .25) 100%);
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar-thumb:hover,
+.sessionConfigModal .ant-modal-body::-webkit-scrollbar-thumb:hover,
+.quickCommandScrollList::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .55) 0%, rgba(139, 92, 246, .55) 100%);
+}
+
+.terminalToolbar .ant-btn {
+  transition: color .15s, background .15s, transform .12s !important;
+  position: relative;
+  overflow: visible;
+}
+
+.terminalToolbar .ant-btn:hover {
+  color: var(--accent) !important;
+  background: rgba(99, 102, 241, .08) !important;
+}
+
+.terminalToolbar .ant-btn:active {
+  transform: scale(.92);
+}
+
+/* —— 三个工具栏按钮的点击反馈：水波涟漪 + 图标弹跳，无消息提示框 —— */
+.terminalActionBtn::before,
+.terminalActionBtn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.terminalActionBtn::before {
+  background: radial-gradient(circle at center, rgba(99, 102, 241, .35) 0%, rgba(99, 102, 241, 0) 70%);
+}
+
+.terminalActionBtn::after {
+  border: 2px solid rgba(99, 102, 241, .55);
+}
+
+.terminalActionBtn-flash::before {
+  animation: terminalActionGlow .38s cubic-bezier(.4, 0, .2, 1) forwards;
+}
+
+.terminalActionBtn-flash::after {
+  animation: terminalActionRipple .42s cubic-bezier(.4, 0, .2, 1) forwards;
+}
+
+.terminalActionBtn-flash .anticon {
+  animation: terminalActionPop .38s cubic-bezier(.34, 1.56, .64, 1);
+  color: var(--accent-2) !important;
+}
+
+@keyframes terminalActionGlow {
+  0%   { opacity: 0; transform: scale(.6); }
+  40%  { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0; transform: scale(1.4); }
+}
+
+@keyframes terminalActionRipple {
+  0%   { opacity: .85; transform: scale(.7); border-width: 2px; }
+  60%  { opacity: .35; transform: scale(1.25); border-width: 1.5px; }
+  100% { opacity: 0;   transform: scale(1.6); border-width: 1px; }
+}
+
+@keyframes terminalActionPop {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(.78) rotate(-8deg); }
+  70%  { transform: scale(1.18) rotate(4deg); }
+  100% { transform: scale(1); }
+}
+
+.terminalPrompt {
+  letter-spacing: .3px;
+}
+
+.codeEditorToolbar {
+  background: linear-gradient(180deg, #f8fafc 0%, #eef3fb 100%);
+}
+
+.fileContent .ant-empty-normal,
+.transferDrawer .ant-empty-normal {
+  padding: 32px 12px;
+  color: var(--text-muted);
+}
+
+.transferDrawer .ant-empty-normal {
+  margin: 56px 12px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.transferDrawer .ant-empty-image {
+  height: 56px;
+  margin-bottom: 14px;
+  opacity: .85;
+}
+
+.transferDrawer .ant-empty-description {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ─── 添加/编辑常用命令 Modal ───────────────────────────────────────────── */
+.commandDialogModal .ant-modal-content {
+  border: 1px solid rgba(232, 238, 246, .9) !important;
+  border-radius: var(--radius-xl) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  box-shadow:
+    0 32px 64px -16px rgba(15, 23, 42, .25),
+    0 12px 24px -10px rgba(99, 102, 241, .2),
+    inset 0 1px 0 rgba(255, 255, 255, .9) !important;
+  overflow: hidden;
+  position: relative;
+}
+
+.commandDialogModal .ant-modal-content::before {
+  content: none;
+  display: none;
+}
+
+.commandDialogModal .ant-modal-content::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 4px;
+  height: 80px;
+  background: radial-gradient(600px 200px at 50% 0%, rgba(99, 102, 241, .08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.commandDialogModal .ant-modal-header {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(241, 245, 249, .8);
+  background: transparent !important;
+  position: relative;
+  z-index: 1;
+}
+
+.commandDialogModal .ant-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  background: linear-gradient(135deg, #1e293b 0%, #3b82f6 70%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.commandDialogModal .ant-modal-body {
+  position: relative;
+  z-index: 1;
+}
+
+.commandDialogModal .ant-form-item-label > label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .2px;
+}
+
+.commandDialogModal .ant-input,
+.commandDialogModal .ant-input-affix-wrapper {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.commandDialogModal .ant-input:hover,
+.commandDialogModal .ant-input-affix-wrapper:hover {
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: #ffffff !important;
+}
+
+.commandDialogModal .ant-input:focus,
+.commandDialogModal .ant-input-affix-wrapper-focused {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+  background: #ffffff !important;
+}
+
+.commandDialogModal .commandDialogTextarea {
+  min-height: 168px !important;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+  padding: 10px 12px !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0) transparent;
+  transition: all .25s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.commandDialogModal .commandDialogTextarea::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.commandDialogModal .commandDialogTextarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.commandDialogModal .commandDialogTextarea::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+  transition: background .2s;
+}
+
+.commandDialogModal .commandDialogTextarea:hover {
+  scrollbar-color: rgba(99, 102, 241, .35) transparent;
+}
+
+.commandDialogModal .commandDialogTextarea:hover::-webkit-scrollbar-thumb,
+.commandDialogModal .commandDialogTextarea:focus::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .35) 0%, rgba(139, 92, 246, .35) 100%);
+}
+
+.commandDialogModal .commandDialogTextarea::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .6) 0%, rgba(139, 92, 246, .6) 100%);
+}
+
+.commandDialogModal .ant-modal-footer .ant-btn {
+  height: 36px;
+  padding: 0 22px;
+  border-radius: var(--radius) !important;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.commandDialogModal .ant-modal-footer .ant-btn-default {
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .9) !important;
+  color: var(--text-secondary) !important;
+}
+
+.commandDialogModal .ant-modal-footer .ant-btn-default:hover {
+  border-color: rgba(99, 102, 241, .35) !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+  transform: translateY(-1px);
+}
+
+.commandDialogModal .ant-modal-footer .ant-btn-primary {
+  border: 0 !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.commandDialogModal .ant-modal-footer .ant-btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 10px 22px -6px rgba(99, 102, 241, .6) !important;
+}
+
+.ant-tooltip-inner {
+  border: 1px solid rgba(203, 213, 225, .82) !important;
+  border-radius: 8px !important;
+  color: #0f172a !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 6px 10px !important;
+  background: rgba(255, 255, 255, .98) !important;
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 14px 30px -14px rgba(15, 23, 42, .28),
+    0 6px 16px -12px rgba(37, 99, 235, .25) !important;
+}
+
+.ant-tooltip-arrow::before {
+  background: rgba(255, 255, 255, .98) !important;
+  border: 1px solid rgba(203, 213, 225, .82) !important;
+}
+
+.ant-btn:not(:disabled):active {
+  transition: transform .08s !important;
+  transform: scale(.98);
+}
+
+.fileEditorSaveButton,
+.editorPrimarySaveButton {
+  background: var(--accent-grad) !important;
+  box-shadow: 0 6px 16px -4px rgba(99, 102, 241, .45) !important;
+}
+
+.fileEditorSaveButton:hover,
+.editorPrimarySaveButton:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.05);
+  box-shadow: 0 10px 22px -6px rgba(99, 102, 241, .55) !important;
+}
+
+.fileEditorSaveButton:active,
+.editorPrimarySaveButton:active {
+  transform: translateY(0);
+  box-shadow: 0 3px 8px rgba(99, 102, 241, .25) !important;
+}
+
+.transferPanel {
+  border-color: rgba(99, 102, 241, .25) !important;
+  box-shadow:
+    0 18px 38px -10px rgba(99, 102, 241, .35),
+    0 4px 12px -4px rgba(15, 23, 42, .15) !important;
+  backdrop-filter: blur(12px) saturate(140%);
+  background: rgba(255, 255, 255, .94) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1);
+}
+
+.transferPanel:hover {
+  border-color: rgba(99, 102, 241, .55) !important;
+  box-shadow:
+    0 24px 48px -12px rgba(99, 102, 241, .45),
+    0 6px 16px -4px rgba(15, 23, 42, .2) !important;
+  transform: translateY(-2px);
+}
+
+.transferPanelHeader strong {
+  background: linear-gradient(135deg, rgba(99, 102, 241, .15) 0%, rgba(139, 92, 246, .15) 100%) !important;
+  color: var(--accent-2) !important;
+  font-weight: 800;
+}
+
+.pathTree {
+  background: linear-gradient(180deg, rgba(251, 253, 255, .95) 0%, rgba(244, 248, 252, .95) 100%);
+}
+
+.pathTreeRoot {
+  font-weight: 700;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1);
+}
+
+.pathTreeRoot:hover,
+.pathTreeRoot-selected {
+  background: linear-gradient(135deg, rgba(99, 102, 241, .1) 0%, rgba(139, 92, 246, .08) 100%) !important;
+  color: var(--accent) !important;
+}
+
+.sessionListModalItem {
+  transition: all .22s cubic-bezier(.4, 0, .2, 1);
+}
+
+.sessionListModalItem:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: linear-gradient(135deg, #ffffff 0%, var(--accent-light) 100%) !important;
+  box-shadow: 0 12px 28px -8px rgba(99, 102, 241, .25);
+}
+
+.transferDrawer.ant-drawer-content {
+  border-left: 0;
+  box-shadow: -24px 0 48px -18px rgba(15, 23, 42, .22);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  position: relative;
+}
+
+.transferDrawer.ant-drawer-content::before {
+  display: none;
+  content: none;
+}
+
+.transferDrawer .ant-drawer-header {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid rgba(232, 238, 246, .8);
+  background: linear-gradient(180deg, rgba(238, 242, 255, .55) 0%, rgba(255, 255, 255, .8) 100%);
+  position: relative;
+}
+
+.transferDrawer .ant-drawer-header::after {
+  content: none;
+  display: none;
+}
+
+.transferDrawer .ant-drawer-header-title {
+  flex-direction: row-reverse;
+  gap: 12px;
+}
+
+.transferDrawer .ant-drawer-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .7);
+  border: 1px solid rgba(232, 238, 246, .6);
+  color: var(--text-secondary);
+  margin: 0;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1);
+}
+
+.transferDrawer .ant-drawer-close:hover {
+  background: rgba(239, 68, 68, .1);
+  border-color: rgba(239, 68, 68, .35);
+  color: var(--danger);
+  transform: rotate(90deg);
+}
+
+.transferDrawer .ant-drawer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  background: linear-gradient(135deg, #1e293b 0%, #3b82f6 70%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.transferDrawer .ant-drawer-extra .ant-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px !important;
+  border: 1px solid rgba(232, 238, 246, .6) !important;
+  background: rgba(255, 255, 255, .7) !important;
+  color: var(--text-secondary) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.transferDrawer .ant-drawer-extra .ant-btn:not(:disabled):hover {
+  border-color: rgba(239, 68, 68, .35) !important;
+  background: linear-gradient(135deg, #ffffff 0%, rgba(254, 226, 226, .8) 100%) !important;
+  color: var(--danger) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px -4px rgba(239, 68, 68, .3) !important;
+}
+
+.transferDrawer .ant-drawer-extra .ant-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.transferListItem {
+  transition: all .22s cubic-bezier(.4, 0, .2, 1);
+  background: linear-gradient(135deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.transferListItem:hover {
+  border-color: rgba(99, 102, 241, .4);
+  box-shadow: 0 12px 24px -8px rgba(99, 102, 241, .3);
+  transform: translateY(-2px);
+}
+
+.ant-divider {
+  border-color: rgba(232, 238, 246, .8) !important;
+}
+
+.quickCommandDropdownPanel {
+  border-radius: 12px !important;
+  border: 1px solid rgba(232, 238, 246, .9);
+  box-shadow:
+    0 24px 48px -12px rgba(99, 102, 241, .35),
+    0 8px 18px -8px rgba(15, 23, 42, .15) !important;
+}
+
+.quickCommandRow {
+  transition: all .18s cubic-bezier(.4, 0, .2, 1);
+}
+
+.quickCommandRow:hover {
+  background: linear-gradient(90deg, rgba(99, 102, 241, .08) 0%, rgba(139, 92, 246, .06) 100%) !important;
+  transform: translateX(2px);
+}
+
+.quickCommandAdd {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  font-weight: 700 !important;
+  color: var(--accent) !important;
+  border-top: 1px solid rgba(232, 238, 246, .8) !important;
+}
+
+.quickCommandAdd:hover {
+  background: linear-gradient(135deg, #ffffff 0%, var(--accent-light) 100%) !important;
+  color: var(--accent-2) !important;
+}
+
+.detailHoverTooltip {
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.detailHoverTooltip .ant-tooltip-inner {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, .8);
+  border-radius: 10px;
+  background: #ffffff !important;
+  color: var(--text-primary) !important;
+  box-shadow:
+    0 18px 38px -14px rgba(15, 23, 42, .28),
+    0 8px 18px -12px rgba(37, 99, 235, .25);
+}
+
+.detailHoverTooltip .ant-tooltip-arrow::before {
+  background: #ffffff;
+  border: 1px solid rgba(203, 213, 225, .75);
+}
+
+.detailHoverPanel {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+  max-width: 420px;
+  padding: 12px;
+}
+
+.detailHoverTitle {
+  overflow: hidden;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detailHoverHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.detailHoverCommand {
+  max-height: 88px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.detailHoverGrid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 12px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.detailHoverGrid span {
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.detailHoverGrid strong {
+  min-width: 0;
+  color: #0f172a;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.detailHoverBadge {
+  justify-self: start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.detailHoverBadge-success {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.detailHoverBadge-failed {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.detailHoverBadge-warning {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.detailHoverError {
+  color: #b91c1c !important;
+}
+
+.quickCommandAdd .anticon {
+  color: var(--accent);
+}
+
+.codeEditorShell {
+  border-color: rgba(232, 238, 246, .9);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+
+.terminalPanel {
+  background:
+    linear-gradient(180deg, rgba(251, 253, 255, 1) 0%, rgba(247, 250, 254, 1) 100%);
+}
+
+.ant-input:focus,
+.ant-input:focus-within,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused,
+.ant-select-focused .ant-select-selector {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+}
+
+.ant-drawer-mask {
+  background: rgba(15, 23, 42, .35) !important;
+  backdrop-filter: blur(4px);
+}
+
+.ant-modal-mask {
+  background: rgba(15, 23, 42, .35) !important;
+  backdrop-filter: blur(4px);
+}
+
+.ant-switch-checked {
+  background: var(--accent-grad) !important;
+}
+
+.ant-select:hover .ant-select-selector {
+  border-color: rgba(99, 102, 241, .4) !important;
+}
+
+.ant-tag {
+  border-radius: 6px !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  padding: 1px 8px !important;
+}

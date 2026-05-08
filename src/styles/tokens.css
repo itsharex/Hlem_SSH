@@ -1,0 +1,62 @@
+/* ─── Design Tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* 基础背景：柔和冷色渐变 + 微弱蓝紫氛围 */
+  --bg-base:      #eef2f9;
+  --bg-surface:   #ffffff;
+  --bg-raised:    #f6f9fd;
+  --bg-overlay:   #eef3fb;
+  --bg-hover:     rgba(37, 99, 235, 0.06);
+  --bg-glass:     rgba(255, 255, 255, 0.72);
+
+  /* 边框 */
+  --border:       #dde6f1;
+  --border-light: #ecf1f7;
+  --border-strong:#cfdaea;
+
+  /* 文字 */
+  --text-primary:   #0b1220;
+  --text-secondary: #44546c;
+  --text-muted:     #8898ad;
+
+  /* 品牌与状态色：更明亮，带紫蓝渐变备用 */
+  --accent:       #3b82f6;
+  --accent-2:     #6366f1;
+  --accent-3:     #8b5cf6;
+  --accent-hover: #2563eb;
+  --accent-dim:   rgba(59, 130, 246, 0.08);
+  --accent-light: #e8f1ff;
+  --accent-grad:  linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+  --success:      #10b981;
+  --success-grad: linear-gradient(135deg, #10b981 0%, #06d6a0 100%);
+  --success-dim:  rgba(16, 185, 129, 0.1);
+  --warning:      #f59e0b;
+  --warning-grad: linear-gradient(135deg, #f59e0b 0%, #fb923c 100%);
+  --danger:       #ef4444;
+  --danger-grad:  linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+  --orange:       #f97316;
+
+  /* 终端样式 */
+  --term-bg:       #fbfdff;
+  --term-surface:  #ffffff;
+  --term-border:   #dde6f1;
+  --term-green:    #059669;
+  --term-blue:     #2563eb;
+  --term-yellow:   #b45309;
+  --term-red:      #dc2626;
+  --term-dim:      #64748b;
+  --term-text:     #0b1220;
+
+  /* 圆角与阴影 */
+  --radius-sm: 8px;
+  --radius:    10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --shadow:    0 4px 12px -4px rgba(15, 23, 42, 0.10), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 12px 28px -10px rgba(15, 23, 42, 0.18), 0 4px 8px -4px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 24px 48px -12px rgba(15, 23, 42, 0.22), 0 12px 18px -10px rgba(15, 23, 42, 0.12);
+  --shadow-glow:0 8px 24px -8px rgba(99, 102, 241, 0.45);
+  --sidebar-width: 280px;
+}
+
+

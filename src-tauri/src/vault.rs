@@ -1,0 +1,686 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+};
+
+use chrono::{DateTime, Duration, Utc};
+use serde::Serialize;
+use zeroize::Zeroize;
+
+use crate::{
+    backup::extract_backup_payload,
+    config::{
+        validate_group_input, validate_session_input, validate_settings, validate_tunnel_input,
+        AppSettings, BackupRecord, ConfigSnapshot, GroupInput, KnownHostEntry, SessionConfig,
+        SessionGroup, SessionInput, TunnelConfig, TunnelInput, VaultData,
+    },
+    crypto::{self, CryptoSession, EncryptedVault},
+    errors::{AppError, AppResult},
+};
+
+pub const VAULT_FILE_NAME: &str = "vault.rpvault";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultStatus {
+    pub exists: bool,
+    pub unlocked: bool,
+}
+
+pub struct VaultStore {
+    path: PathBuf,
+    unlocked: Option<UnlockedVault>,
+}
+
+struct UnlockedVault {
+    data: VaultData,
+    crypto: CryptoSession,
+}
+
+impl Drop for UnlockedVault {
+    fn drop(&mut self) {
+        self.crypto.key.zeroize();
+        self.crypto.salt.zeroize();
+    }
+}
+
+impl VaultStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            unlocked: None,
+        }
+    }
+
+    pub fn status(&self) -> VaultStatus {
+        VaultStatus {
+            exists: self.path.exists(),
+            unlocked: self.unlocked.is_some(),
+        }
+    }
+
+    pub fn vault_file_path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    pub fn create(&mut self, master_password: &str) -> AppResult<ConfigSnapshot> {
+        if self.path.exists() {
+            return Err(AppError::VaultAlreadyExists);
+        }
+
+        let data = VaultData::with_default_group();
+        let (encrypted, crypto) = crypto::encrypt_with_password(master_password, &data)?;
+        write_encrypted(&self.path, &encrypted)?;
+        self.unlocked = Some(UnlockedVault {
+            data: data.clone(),
+            crypto,
+        });
+        Ok(ConfigSnapshot { data })
+    }
+
+    pub fn unlock(&mut self, master_password: &str) -> AppResult<ConfigSnapshot> {
+        let encrypted = read_encrypted(&self.path)?;
+        let (data, crypto) = crypto::decrypt_with_password(master_password, &encrypted)?;
+        self.unlocked = Some(UnlockedVault {
+            data: data.clone(),
+            crypto,
+        });
+        Ok(ConfigSnapshot { data })
+    }
+
+    pub fn lock(&mut self) -> VaultStatus {
+        self.unlocked = None;
+        self.status()
+    }
+
+    pub fn ensure_unlocked(&self) -> AppResult<()> {
+        self.unlocked()?;
+        Ok(())
+    }
+
+    pub fn change_master_password(
+        &mut self,
+        current_password: &str,
+        new_password: &str,
+    ) -> AppResult<ConfigSnapshot> {
+        if new_password.is_empty() {
+            return Err(AppError::InvalidInput("新主密码不能为空".to_string()));
+        }
+        let encrypted = read_encrypted(&self.path)?;
+        crypto::decrypt_with_password(current_password, &encrypted)?;
+        let data = self.unlocked()?.data.clone();
+        let (encrypted, crypto) = crypto::encrypt_with_password(new_password, &data)?;
+        write_encrypted(&self.path, &encrypted)?;
+        self.unlocked = Some(UnlockedVault {
+            data: data.clone(),
+            crypto,
+        });
+        Ok(ConfigSnapshot { data })
+    }
+
+    pub fn snapshot(&self) -> AppResult<ConfigSnapshot> {
+        Ok(ConfigSnapshot {
+            data: self.unlocked()?.data.clone(),
+        })
+    }
+
+    pub fn settings_update(&mut self, settings: AppSettings) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_settings(&settings)?;
+            data.settings = settings;
+            Ok(())
+        })
+    }
+
+    pub fn create_tunnel(&mut self, input: TunnelInput) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_tunnel_input(data, &input)?;
+            data.tunnels.push(TunnelConfig::new(input));
+            Ok(())
+        })
+    }
+
+    pub fn tunnels(&self) -> AppResult<Vec<TunnelConfig>> {
+        Ok(self.unlocked()?.data.tunnels.clone())
+    }
+
+    pub fn update_tunnel(
+        &mut self,
+        tunnel_id: &str,
+        input: TunnelInput,
+    ) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_tunnel_input(data, &input)?;
+            let tunnel = data
+                .tunnels
+                .iter_mut()
+                .find(|tunnel| tunnel.id == tunnel_id)
+                .ok_or_else(|| AppError::NotFound(format!("隧道 {}", tunnel_id)))?;
+            tunnel.update(input);
+            Ok(())
+        })
+    }
+
+    pub fn delete_tunnel(&mut self, tunnel_id: &str) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            let before_len = data.tunnels.len();
+            data.tunnels.retain(|tunnel| tunnel.id != tunnel_id);
+            if before_len == data.tunnels.len() {
+                return Err(AppError::NotFound(format!("隧道 {}", tunnel_id)));
+            }
+            Ok(())
+        })
+    }
+
+    pub fn validate_backup(&self, path: &Path) -> AppResult<ConfigSnapshot> {
+        let payload = read_backup_payload(path)?;
+        self.validate_backup_bytes(&payload)
+    }
+
+    pub fn validate_backup_bytes(&self, bytes: &[u8]) -> AppResult<ConfigSnapshot> {
+        let payload = extract_backup_payload(bytes)?;
+        let unlocked = self.unlocked()?;
+        let encrypted = read_encrypted_bytes(&payload)?;
+        let data = crypto::decrypt_with_key(&unlocked.crypto.key, &encrypted)
+            .map_err(backup_decrypt_error)?;
+        Ok(ConfigSnapshot { data })
+    }
+
+    pub fn backup_import(&mut self, path: &Path) -> AppResult<ConfigSnapshot> {
+        let payload = read_backup_payload(path)?;
+        self.backup_import_bytes(&payload)
+    }
+
+    pub fn backup_import_bytes(&mut self, bytes: &[u8]) -> AppResult<ConfigSnapshot> {
+        let payload = extract_backup_payload(bytes)?;
+        let encrypted = read_encrypted_bytes(&payload)?;
+        let vault_path = self.path.clone();
+        let unlocked = self.unlocked_mut()?;
+        let data = crypto::decrypt_with_key(&unlocked.crypto.key, &encrypted)
+            .map_err(backup_decrypt_error)?;
+        let encrypted =
+            crypto::encrypt_with_key(&unlocked.crypto.key, &unlocked.crypto.salt, &data)?;
+        write_encrypted(&vault_path, &encrypted)?;
+        unlocked.data = data.clone();
+        Ok(ConfigSnapshot { data })
+    }
+
+    #[cfg(test)]
+    pub fn add_backup_records(
+        &mut self,
+        records: Vec<BackupRecord>,
+    ) -> AppResult<(ConfigSnapshot, Vec<PathBuf>)> {
+        if records.is_empty() {
+            return Ok((self.snapshot()?, Vec::new()));
+        }
+        let mut removed_local_paths = Vec::new();
+        let snapshot = self.mutate(|data| {
+            data.backup_records.extend(records);
+            removed_local_paths = prune_backup_records(data);
+            Ok(())
+        })?;
+        Ok((snapshot, removed_local_paths))
+    }
+
+    pub fn replace_backup_records(
+        &mut self,
+        records: Vec<BackupRecord>,
+    ) -> AppResult<(ConfigSnapshot, Vec<PathBuf>)> {
+        let mut removed_local_paths = Vec::new();
+        let snapshot = self.mutate(|data| {
+            data.backup_records = records;
+            removed_local_paths = prune_backup_records(data);
+            Ok(())
+        })?;
+        Ok((snapshot, removed_local_paths))
+    }
+
+    pub fn delete_backup_record(
+        &mut self,
+        record_id: &str,
+        delete_file: bool,
+    ) -> AppResult<(ConfigSnapshot, Option<PathBuf>)> {
+        let mut delete_path = None;
+        let snapshot = self.mutate(|data| {
+            let index = data
+                .backup_records
+                .iter()
+                .position(|record| record.id == record_id)
+                .ok_or_else(|| AppError::NotFound(format!("备份记录 {}", record_id)))?;
+            let record = data.backup_records.remove(index);
+            if delete_file && record.target_kind == "local" && record.status == "success" {
+                delete_path = Some(PathBuf::from(record.target_path));
+            }
+            Ok(())
+        })?;
+        Ok((snapshot, delete_path))
+    }
+
+    pub fn session(&self, session_id: &str) -> AppResult<SessionConfig> {
+        self.unlocked()?
+            .data
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(format!("会话 {}", session_id)))
+    }
+
+    pub fn known_host(&self, host: &str, port: u16) -> AppResult<Option<KnownHostEntry>> {
+        Ok(self
+            .unlocked()?
+            .data
+            .known_hosts
+            .iter()
+            .find(|entry| entry.host == host && entry.port == port)
+            .cloned())
+    }
+
+    pub fn trust_host_key(
+        &mut self,
+        session_id: &str,
+        algorithm: String,
+        fingerprint: String,
+    ) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            let session = data
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+                .ok_or_else(|| AppError::NotFound(format!("会话 {}", session_id)))?;
+            let host = session.host.clone();
+            let port = session.port;
+            session.ssh.host_key_fingerprint = Some(fingerprint.clone());
+
+            let entry = KnownHostEntry {
+                host: host.clone(),
+                port,
+                algorithm,
+                fingerprint,
+                trusted_at: crate::config::now(),
+            };
+            if let Some(existing) = data
+                .known_hosts
+                .iter_mut()
+                .find(|known| known.host == host && known.port == port)
+            {
+                *existing = entry;
+            } else {
+                data.known_hosts.push(entry);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn create_group(&mut self, input: GroupInput) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_group_input(data, None, &input)?;
+            let sort_order = data.groups.len() as u32;
+            data.groups.push(SessionGroup::new(input, sort_order));
+            Ok(())
+        })
+    }
+
+    pub fn update_group(&mut self, group_id: &str, input: GroupInput) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_group_input(data, Some(group_id), &input)?;
+            let group = data
+                .groups
+                .iter_mut()
+                .find(|group| group.id == group_id)
+                .ok_or_else(|| AppError::NotFound(format!("分组 {}", group_id)))?;
+            group.update(input);
+            Ok(())
+        })
+    }
+
+    pub fn delete_group(&mut self, group_id: &str) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            let before_len = data.groups.len();
+            data.groups.retain(|group| group.id != group_id);
+            if before_len == data.groups.len() {
+                return Err(AppError::NotFound(format!("分组 {}", group_id)));
+            }
+            for group in &mut data.groups {
+                if group.parent_id.as_deref() == Some(group_id) {
+                    group.parent_id = None;
+                }
+            }
+            for session in &mut data.sessions {
+                if session.group_id.as_deref() == Some(group_id) {
+                    session.group_id = None;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn create_session(&mut self, input: SessionInput) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_session_input(data, None, &input)?;
+            data.sessions.push(SessionConfig::new(input));
+            Ok(())
+        })
+    }
+
+    pub fn update_session(
+        &mut self,
+        session_id: &str,
+        input: SessionInput,
+    ) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            validate_session_input(data, Some(session_id), &input)?;
+            let session = data
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+                .ok_or_else(|| AppError::NotFound(format!("会话 {}", session_id)))?;
+            session.update(input);
+            Ok(())
+        })
+    }
+
+    pub fn delete_session(&mut self, session_id: &str) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            let before_len = data.sessions.len();
+            data.sessions.retain(|session| session.id != session_id);
+            if before_len == data.sessions.len() {
+                return Err(AppError::NotFound(format!("会话 {}", session_id)));
+            }
+            data.tunnels
+                .retain(|tunnel| tunnel.session_id != session_id);
+            Ok(())
+        })
+    }
+
+    pub fn duplicate_session(&mut self, session_id: &str) -> AppResult<ConfigSnapshot> {
+        self.mutate(|data| {
+            let session = data
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .ok_or_else(|| AppError::NotFound(format!("会话 {}", session_id)))?;
+            data.sessions.push(session.duplicate());
+            Ok(())
+        })
+    }
+
+    fn mutate(
+        &mut self,
+        update: impl FnOnce(&mut VaultData) -> AppResult<()>,
+    ) -> AppResult<ConfigSnapshot> {
+        let unlocked = self.unlocked_mut()?;
+        update(&mut unlocked.data)?;
+        unlocked.data.touch();
+        let snapshot = unlocked.data.clone();
+        let encrypted =
+            crypto::encrypt_with_key(&unlocked.crypto.key, &unlocked.crypto.salt, &snapshot)?;
+        write_encrypted(&self.path, &encrypted)?;
+        Ok(ConfigSnapshot { data: snapshot })
+    }
+
+    fn unlocked(&self) -> AppResult<&UnlockedVault> {
+        self.unlocked.as_ref().ok_or(AppError::VaultLocked)
+    }
+
+    fn unlocked_mut(&mut self) -> AppResult<&mut UnlockedVault> {
+        self.unlocked.as_mut().ok_or(AppError::VaultLocked)
+    }
+}
+
+fn read_encrypted(path: &Path) -> AppResult<EncryptedVault> {
+    if !path.exists() {
+        return Err(AppError::VaultNotFound);
+    }
+    let content = fs::read(path)?;
+    read_encrypted_bytes(&content)
+}
+
+fn read_backup_payload(path: &Path) -> AppResult<Vec<u8>> {
+    if !path.exists() {
+        return Err(AppError::VaultNotFound);
+    }
+    let content = fs::read(path)?;
+    extract_backup_payload(&content)
+}
+
+fn read_encrypted_bytes(bytes: &[u8]) -> AppResult<EncryptedVault> {
+    Ok(serde_json::from_slice(bytes)?)
+}
+
+fn write_encrypted(path: &Path, encrypted: &EncryptedVault) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("rpvault.tmp");
+    let content = serde_json::to_string_pretty(encrypted)?;
+    fs::write(&tmp_path, content)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn backup_decrypt_error(error: AppError) -> AppError {
+    match error {
+        AppError::InvalidMasterPassword => {
+            AppError::InvalidInput("备份文件与当前工作区不匹配或已损坏".to_string())
+        }
+        other => other,
+    }
+}
+
+fn prune_backup_records(data: &mut VaultData) -> Vec<PathBuf> {
+    let retention_count = usize::from(data.settings.backup.retention_count.max(1));
+    let retention_days = i64::from(data.settings.backup.retention_days);
+    let cutoff = if retention_days > 0 {
+        Some(Utc::now() - Duration::days(retention_days))
+    } else {
+        None
+    };
+
+    data.backup_records
+        .sort_by(|left, right| right.created_at.cmp(&left.created_at));
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut remove_ids = HashSet::new();
+    let mut delete_paths = Vec::new();
+
+    for record in &data.backup_records {
+        let count = counts.entry(record.target_kind.clone()).or_insert(0);
+        *count += 1;
+        let too_many = *count > retention_count;
+        let too_old = cutoff
+            .as_ref()
+            .and_then(|cutoff| {
+                DateTime::parse_from_rfc3339(&record.created_at)
+                    .ok()
+                    .map(|created| created.with_timezone(&Utc) < *cutoff)
+            })
+            .unwrap_or(false);
+        if too_many || too_old {
+            remove_ids.insert(record.id.clone());
+            if record.target_kind == "local" && record.status == "success" {
+                delete_paths.push(PathBuf::from(&record.target_path));
+            }
+        }
+    }
+
+    data.backup_records
+        .retain(|record| !remove_ids.contains(&record.id));
+    delete_paths
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::config::{AuthConfig, TerminalOptions};
+
+    fn store_path() -> PathBuf {
+        tempdir().unwrap().keep().join(VAULT_FILE_NAME)
+    }
+
+    fn session_input(name: &str, group_id: Option<String>) -> SessionInput {
+        SessionInput {
+            name: name.to_string(),
+            group_id,
+            host: "127.0.0.1".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth: AuthConfig::password(Some("secret".to_string())),
+            ssh: Default::default(),
+            default_path: "/tmp".to_string(),
+            tags: vec!["test".to_string()],
+            note: None,
+            terminal: TerminalOptions::default(),
+            sftp: Default::default(),
+        }
+    }
+
+    fn tunnel_input(name: &str, session_id: String) -> TunnelInput {
+        TunnelInput {
+            name: name.to_string(),
+            session_id,
+            forward_type: "local".to_string(),
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 0,
+            target_host: "127.0.0.1".to_string(),
+            target_port: 22,
+        }
+    }
+
+    #[test]
+    fn rejects_snapshot_before_unlock() {
+        let store = VaultStore::new(store_path());
+        assert!(matches!(store.snapshot(), Err(AppError::VaultLocked)));
+    }
+
+    #[test]
+    fn persists_group_and_session_crud() {
+        let path = store_path();
+        let mut store = VaultStore::new(path.clone());
+        store.create("pass-123456").unwrap();
+        let snapshot = store
+            .create_group(GroupInput {
+                name: "生产".to_string(),
+                parent_id: None,
+            })
+            .unwrap();
+        let group_id = snapshot.data.groups.last().unwrap().id.clone();
+        let snapshot = store
+            .create_session(session_input("节点A", Some(group_id)))
+            .unwrap();
+        let session_id = snapshot.data.sessions.last().unwrap().id.clone();
+        store.duplicate_session(&session_id).unwrap();
+        store.delete_session(&session_id).unwrap();
+        store.lock();
+
+        let snapshot = store.unlock("pass-123456").unwrap();
+        assert!(snapshot
+            .data
+            .groups
+            .iter()
+            .any(|group| group.name == "生产"));
+        assert!(snapshot
+            .data
+            .sessions
+            .iter()
+            .any(|session| session.name == "节点A 副本"));
+    }
+
+    #[test]
+    fn changes_master_password() {
+        let path = store_path();
+        let mut store = VaultStore::new(path.clone());
+        store.create("old-pass").unwrap();
+        store
+            .change_master_password("old-pass", "new-pass")
+            .unwrap();
+        store.lock();
+
+        assert!(store.unlock("old-pass").is_err());
+        assert!(store.unlock("new-pass").is_ok());
+    }
+
+    #[test]
+    fn create_starts_with_default_group_and_no_sessions() {
+        let path = store_path();
+        let mut store = VaultStore::new(path);
+        let snapshot = store.create("pass-123456").unwrap();
+
+        assert_eq!(snapshot.data.groups.len(), 1);
+        assert_eq!(snapshot.data.groups[0].name, "默认分组");
+        assert!(snapshot.data.sessions.is_empty());
+        assert!(snapshot.data.known_hosts.is_empty());
+    }
+
+    #[test]
+    fn backup_records_are_pruned_by_retention_count() {
+        let path = store_path();
+        let mut store = VaultStore::new(path);
+        store.create("pass-123456").unwrap();
+        let mut settings = AppSettings::default();
+        settings.backup.retention_count = 1;
+        store.settings_update(settings).unwrap();
+
+        let first = BackupRecord::success(
+            "a.rpvault".to_string(),
+            "local",
+            "C:\\backup\\a.rpvault".to_string(),
+            10,
+        );
+        let second = BackupRecord::success(
+            "b.rpvault".to_string(),
+            "local",
+            "C:\\backup\\b.rpvault".to_string(),
+            10,
+        );
+
+        let (_snapshot, delete_paths) = store.add_backup_records(vec![first, second]).unwrap();
+        assert_eq!(store.snapshot().unwrap().data.backup_records.len(), 1);
+        assert_eq!(delete_paths.len(), 1);
+    }
+
+    #[test]
+    fn import_with_unrelated_key_does_not_overwrite_current_vault() {
+        let path = store_path();
+        let backup_path = path.with_file_name("foreign.rpvault");
+        let mut store = VaultStore::new(path.clone());
+        store.create("current-pass").unwrap();
+
+        let mut foreign = VaultStore::new(backup_path.clone());
+        foreign.create("backup-pass").unwrap();
+
+        assert!(store.backup_import(&backup_path).is_err());
+        store.lock();
+        let snapshot = store.unlock("current-pass").unwrap();
+        assert_eq!(snapshot.data.groups[0].name, "默认分组");
+    }
+
+    #[test]
+    fn manages_tunnel_templates_and_rejects_missing_session() {
+        let path = store_path();
+        let mut store = VaultStore::new(path);
+        store.create("pass-123456").unwrap();
+        let snapshot = store.create_session(session_input("节点A", None)).unwrap();
+        let session_id = snapshot.data.sessions[0].id.clone();
+
+        let snapshot = store
+            .create_tunnel(tunnel_input("数据库", session_id.clone()))
+            .unwrap();
+        let tunnel_id = snapshot.data.tunnels[0].id.clone();
+        assert_eq!(snapshot.data.tunnels[0].name, "数据库");
+
+        let snapshot = store
+            .update_tunnel(&tunnel_id, tunnel_input("数据库新", session_id))
+            .unwrap();
+        assert_eq!(snapshot.data.tunnels[0].name, "数据库新");
+
+        let snapshot = store.delete_tunnel(&tunnel_id).unwrap();
+        assert!(snapshot.data.tunnels.is_empty());
+        assert!(store
+            .create_tunnel(tunnel_input("缺失会话", "missing".to_string()))
+            .is_err());
+    }
+}

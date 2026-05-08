@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./nexus_icon.svg" />
+    <title>HelM</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: #f4f7fa;
+        color: #0f172a;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+
+      .bootScreen {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        width: 100%;
+        height: 100%;
+        min-height: 100vh;
+        background: #f4f7fa;
+      }
+
+      .bootMark {
+        width: 38px;
+        height: 38px;
+        display: block;
+        border-radius: 8px;
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.24);
+      }
+
+      .bootScreen > div:last-child {
+        display: grid;
+        gap: 2px;
+      }
+
+      .bootScreen strong {
+        font-size: 16px;
+        line-height: 20px;
+      }
+
+      .bootScreen span {
+        color: #64748b;
+        font-size: 12px;
+        line-height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="bootScreen" role="status" aria-live="polite">
+        <img class="bootMark" src="./nexus_icon.svg" alt="" aria-hidden="true" />
+        <div>
+          <strong>HelM</strong>
+          <span>正在启动...</span>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
