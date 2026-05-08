@@ -85,7 +85,7 @@ export function SessionConfigModal({
       destroyOnHidden
       className="sessionConfigModal"
     >
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <Form form={form} layout="vertical" requiredMark={false} autoComplete="off">
         <BaseFields
           mode={mode}
           groups={groups}
@@ -111,7 +111,7 @@ function BaseFields({
   return (
     <div className="sessionFormGrid">
       <Form.Item label="连接名称" name="name">
-        <Input placeholder="生产服务器" />
+        <Input placeholder="生产服务器" autoComplete="off" />
       </Form.Item>
       <Form.Item label="分组" name="groupId">
         <Select
@@ -121,13 +121,13 @@ function BaseFields({
         />
       </Form.Item>
       <Form.Item label="主机地址" name="host" rules={[{ required: true, message: "请输入主机地址" }]}>
-        <Input placeholder="192.168.1.10" />
+        <Input placeholder="192.168.1.10" autoComplete="off" />
       </Form.Item>
       <Form.Item label="端口" name="port" rules={[{ required: true, message: "请输入端口" }]}>
-        <InputNumber min={1} max={65535} precision={0} className="fullControl" />
+        <InputNumber min={1} max={65535} precision={0} className="fullControl" autoComplete="off" />
       </Form.Item>
       <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
-        <Input placeholder="root" />
+        <Input placeholder="root" autoComplete="off" />
       </Form.Item>
       {/* 认证方式与密码 - 移至基本 Tab，减少 Tab 切换 */}
       <Form.Item label="认证方式" name="authMethod" className="sessionFormWide">
@@ -185,10 +185,10 @@ function BaseFields({
             />
           </Form.Item>
           <Form.Item label="代理主机" name="proxyHost" rules={[{ required: true, message: "请输入代理主机" }]}>
-            <Input placeholder="127.0.0.1" />
+            <Input placeholder="127.0.0.1" autoComplete="off" />
           </Form.Item>
           <Form.Item label="代理端口" name="proxyPort" rules={[{ required: true, message: "请输入代理端口" }]}>
-            <InputNumber min={1} max={65535} precision={0} className="fullControl" />
+            <InputNumber min={1} max={65535} precision={0} className="fullControl" autoComplete="off" />
           </Form.Item>
         </>
       )}
@@ -224,6 +224,7 @@ function PrivateKeyPathField() {
     <Form.Item label="私钥文件路径" name="privateKeyPath" className="sessionFormWide">
       <Input
         placeholder="点击浏览选择私钥文件，或手动输入路径"
+        autoComplete="off"
         addonAfter={
           <Button
             type="text"

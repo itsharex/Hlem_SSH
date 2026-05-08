@@ -37,7 +37,7 @@ import { AppLoadingFallback } from "./components/shared/AppLoadingFallback";
 import { AppProviders } from "./components/shared/AppProviders";
 import { EmptyWorkspace } from "./components/shared/EmptyWorkspace";
 import { VaultGate } from "./components/VaultGate";
-import { configToRemoteSession, createDefaultSessionInput, defaultRemoteHomePath, getErrorMessage, initialRemotePath } from "./lib/configMapping";
+import { configToRemoteSession, createDefaultSessionInput, defaultRemoteHomePath, getErrorCode, getErrorMessage, initialRemotePath } from "./lib/configMapping";
 import {
   getBaseName as getRemoteBaseName,
   getParentPath as getRemoteParentPath,
@@ -263,25 +263,32 @@ function App() {
   async function lockVault() {
     await runVaultAction(async () => {
       await vaultApi.lock();
-      setConfigSnapshot(undefined);
-      setSessions([]);
-      setOpenSessionIds([]);
-      setActiveSessionId("");
-      setConnectingSessionId(null);
-      setSessionModal(null);
-      setSessionListOpen(false);
-      setTransferCenterOpen(false);
-      setTransfers([]);
-      setFileSaveRecords([]);
-      setForwards([]);
-      setBackupOpen(false);
-      setSettingsOpen(false);
-      setTunnelOpen(false);
-      setFileLoadingSessionIds(new Set());
-      setCwdTrackingTerminalIds(new Set());
-      clearTerminalOutputBuffers();
+      resetWorkspaceState();
       setVaultMode("unlock");
     });
+  }
+
+  function resetWorkspaceState() {
+    setConfigSnapshot(undefined);
+    setSessions([]);
+    setOpenSessionIds([]);
+    setActiveSessionId("");
+    setConnectingSessionId(null);
+    setSessionModal(null);
+    setSessionListOpen(false);
+    setTransferCenterOpen(false);
+    setTransfers([]);
+    setFileSaveRecords([]);
+    setForwards([]);
+    setBackupOpen(false);
+    setSettingsOpen(false);
+    setTunnelOpen(false);
+    setFileLoadingSessionIds(new Set());
+    setCwdTrackingTerminalIds(new Set());
+    terminalSessionMapRef.current.clear();
+    pendingTerminalEntriesRef.current.clear();
+    cwdTrackingAwaitingMarkerRef.current.clear();
+    clearTerminalOutputBuffers();
   }
 
   async function runVaultAction(action: () => Promise<void>) {
@@ -363,25 +370,7 @@ function App() {
 
   async function closeSession(id: string) {
     const session = sessions.find((item) => item.id === id);
-    if (session?.connectionId) {
-      try {
-        await remoteApi.disconnect(session.connectionId);
-        removeCwdTrackingTerminalId(session.terminalId);
-        updateSession(session.id, (item) => ({
-          ...item,
-          state: "disconnected",
-          connectionId: null,
-          terminalId: null,
-          sftpId: null,
-          telemetryJobId: null,
-          telemetry: createEmptyTelemetry(item.host),
-          files: [],
-          terminal: [...item.terminal, createTerminalEntry("system", "连接已断开")],
-        }));
-      } catch (error) {
-        appendTerminal(session.id, "error", formatSessionError(error, session));
-      }
-    }
+    if (session?.connectionId) await teardownSession(session);
     setOpenSessionIds((current) => {
       const nextIds = current.filter((item) => item !== id);
       if (activeSessionId === id) setActiveSessionId(nextIds[0] ?? "");
@@ -391,6 +380,11 @@ function App() {
 
   async function disconnectSession(session = activeSession) {
     if (!session?.connectionId) return;
+    await teardownSession(session);
+  }
+
+  async function teardownSession(session: RemoteSession) {
+    if (!session.connectionId) return;
     try {
       await remoteApi.disconnect(session.connectionId);
       removeCwdTrackingTerminalId(session.terminalId);
@@ -420,11 +414,11 @@ function App() {
   }
 
   function formatSessionError(error: unknown, session: Pick<RemoteSession, "name" | "connectionId" | "terminalId" | "sftpId">): string {
-    const message = getErrorMessage(error);
-    return [session.connectionId, session.terminalId, session.sftpId].reduce<string>(
-      (current, id) => (id ? current.split(id).join(session.name) : current),
-      message,
-    );
+    let message = getErrorMessage(error);
+    for (const id of [session.connectionId, session.terminalId, session.sftpId]) {
+      if (id) message = message.split(id).join(session.name);
+    }
+    return message;
   }
 
   function appendTerminal(sessionId: string, kind: TerminalOutputEvent["kind"] | "input", content: string) {
@@ -595,8 +589,7 @@ function App() {
     try {
       return await remoteApi.retryTransfer(transfer.transferId);
     } catch (error) {
-      const message = getErrorMessage(error);
-      if (!message.includes("传输任务已失效") && !message.includes("missing")) throw error;
+      if (!isMissingTransferError(error)) throw error;
       const targetSession = sessionForTransfer(transfer);
       if (!targetSession?.sftpId) throw error;
       return restartTransferOnSession(transfer, targetSession.sftpId);
@@ -607,6 +600,10 @@ function App() {
     return transfer.direction === "upload"
       ? remoteApi.upload(sftpId, transfer.localPath, transfer.remotePath, true, true, true)
       : remoteApi.download(sftpId, transfer.remotePath, transfer.localPath, true);
+  }
+
+  function isMissingTransferError(error: unknown) {
+    return getErrorCode(error) === "notFound" && /传输任务/.test(getErrorMessage(error));
   }
 
   async function removeTransfer(transferId: string) {
@@ -685,8 +682,12 @@ function App() {
   }
 
   function enqueueTerminalOutput(terminalId: string, entry: TerminalEntry) {
-    const buffer = terminalOutputBuffersRef.current.get(terminalId) ?? [];
-    terminalOutputBuffersRef.current.set(terminalId, [...buffer, entry]);
+    const buffer = terminalOutputBuffersRef.current.get(terminalId);
+    if (buffer) {
+      buffer.push(entry);
+    } else {
+      terminalOutputBuffersRef.current.set(terminalId, [entry]);
+    }
     if (terminalOutputFlushRef.current !== null) return;
     terminalOutputFlushRef.current = window.requestAnimationFrame(flushTerminalOutput);
   }
@@ -694,8 +695,8 @@ function App() {
   function flushTerminalOutput() {
     terminalOutputFlushRef.current = null;
     if (terminalOutputBuffersRef.current.size === 0) return;
-    const batch = new Map(terminalOutputBuffersRef.current);
-    terminalOutputBuffersRef.current.clear();
+    const batch = terminalOutputBuffersRef.current;
+    terminalOutputBuffersRef.current = new Map();
     const matchedTerminalIds = new Set<string>();
     setSessions((current) =>
       current.map((session) => {
@@ -713,6 +714,17 @@ function App() {
       if (matchedTerminalIds.has(terminalId)) continue;
       const pending = pendingTerminalEntriesRef.current.get(terminalId) ?? [];
       pendingTerminalEntriesRef.current.set(terminalId, appendTerminalStreamEntries(pending, entries));
+    }
+    pruneStalePendingTerminals();
+  }
+
+  function pruneStalePendingTerminals() {
+    if (pendingTerminalEntriesRef.current.size === 0) return;
+    const live = new Set<string>(terminalSessionMapRef.current.keys());
+    for (const terminalId of pendingTerminalEntriesRef.current.keys()) {
+      if (!live.has(terminalId)) {
+        pendingTerminalEntriesRef.current.delete(terminalId);
+      }
     }
   }
 
@@ -799,7 +811,7 @@ function App() {
         remoteApi
           .openTerminal(connectionId, 100, 30)
           .then((value) => ({ value, error: null as unknown }))
-          .catch((error) => ({ value: null, error })),
+          .catch((error: unknown) => ({ value: null, error })),
       ]);
       const sftp = sftpResult.sftp;
       const sftpPath = sftpResult.path;
@@ -877,12 +889,12 @@ function App() {
       const sftp = await remoteApi.openSftp(connectionId);
       try {
         const files = await remoteApi.listFiles(sftp.sftpId, initialPath);
-        return { sftp, path: initialPath, files, error: null as unknown | null };
+        return { sftp, path: initialPath, files, error: null as unknown };
       } catch (error) {
         const homePath = defaultRemoteHomePath(username);
         if (normalizeRemotePath(initialPath) === homePath) throw error;
         const files = await remoteApi.listFiles(sftp.sftpId, homePath);
-        return { sftp, path: homePath, files, error: null as unknown | null };
+        return { sftp, path: homePath, files, error: null as unknown };
       }
     } catch (error) {
       return { sftp: null, path: initialPath, files: [] as RemoteSession["files"], error };
@@ -1010,6 +1022,7 @@ function App() {
   async function uploadLocalFiles(localPaths: string[], targetDirectory: string) {
     const session = activeSession;
     if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
+    // 单文件上传走单连接 + 大缓冲（accelerated）；多文件走并发 + 普通缓冲，避免内存峰值。
     const accelerated = localPaths.length === 1;
     const queuedTransfers = await runUploadQueue(
       localPaths,
@@ -1138,29 +1151,17 @@ function App() {
   }
 
   async function importBackup(path: string) {
-    setBackupBusy(true);
-    try {
-      const snapshot = await vaultApi.backupImport(path);
-      terminalSessionMapRef.current.clear();
-      pendingTerminalEntriesRef.current.clear();
-      clearTerminalOutputBuffers();
-      cwdTrackingAwaitingMarkerRef.current.clear();
-      setCwdTrackingTerminalIds(new Set());
-      setTransfers([]);
-      setForwards([]);
-      setFileLoadingSessionIds(new Set());
-      setConnectingSessionId(null);
-      applySnapshot(snapshot);
-      setBackupOpen(false);
-    } finally {
-      setBackupBusy(false);
-    }
+    await loadBackupSnapshot(() => vaultApi.backupImport(path));
   }
 
   async function restoreBackupRecord(recordId: string) {
+    await loadBackupSnapshot(() => vaultApi.backupRecordRestore(recordId));
+  }
+
+  async function loadBackupSnapshot(loader: () => Promise<ConfigSnapshot>) {
     setBackupBusy(true);
     try {
-      const snapshot = await vaultApi.backupRecordRestore(recordId);
+      const snapshot = await loader();
       terminalSessionMapRef.current.clear();
       pendingTerminalEntriesRef.current.clear();
       clearTerminalOutputBuffers();

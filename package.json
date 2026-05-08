@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/free-vite-port.mjs",
+    "predev": "cargo run --quiet --release --manifest-path tools/free-port/Cargo.toml",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --no-bundle",
+    "tauri:build": "tauri build",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {

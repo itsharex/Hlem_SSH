@@ -553,6 +553,89 @@
   height: 0;
 }
 
+/* ─── 已备份表格：滚动条悬停隐式显示 ─────────────────────────────────────── */
+.backupRecordTable .ant-table-body {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color .18s ease;
+}
+
+.backupRecordTable .ant-table-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.backupRecordTable .ant-table-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.backupRecordTable .ant-table-body::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 8px;
+  transition: background-color .18s ease;
+}
+
+.backupRecordTable .ant-table-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.backupRecordTable:hover .ant-table-body,
+.backupRecordTable .ant-table-body:hover,
+.backupRecordTable .ant-table-body:focus-within {
+  scrollbar-color: rgba(99, 102, 241, .35) transparent;
+}
+
+.backupRecordTable:hover .ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, .28);
+}
+
+.backupRecordTable .ant-table-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, .55);
+}
+
+/* ─── 已备份行：悬停显示明细 Tooltip ─────────────────────────────────────── */
+.backupRecordRowTooltip {
+  --antd-arrow-background-color: #ffffff;
+}
+
+.backupRecordRowTooltip .ant-tooltip-inner {
+  min-width: 280px;
+  max-width: 480px;
+  padding: 10px 12px;
+  background: #ffffff !important;
+  color: var(--text-primary, #0f172a) !important;
+  border: 1px solid rgba(99, 102, 241, .18);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px -10px rgba(15, 23, 42, .25);
+}
+
+.backupRecordRowTooltip .ant-tooltip-arrow::before,
+.backupRecordRowTooltip .ant-tooltip-arrow::after {
+  background: #ffffff !important;
+}
+
+.backupRecordRowTooltipContent {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary, #0f172a);
+}
+
+.backupRecordRowTooltipContent > div {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  word-break: break-all;
+  color: var(--text-primary, #0f172a);
+}
+
+.backupRecordRowTooltipContent > div > span {
+  color: var(--text-secondary, #475569);
+  font-weight: 600;
+  letter-spacing: .4px;
+}
+
 .backupPanel-actions {
   grid-template-columns: 1fr;
 }

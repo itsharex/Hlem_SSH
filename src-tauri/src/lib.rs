@@ -35,7 +35,6 @@ fn app_version() -> &'static str {
 fn frontend_ready(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
-        let _ = window.center();
         let _ = window.set_focus();
     }
     if let Some(window) = app.get_webview_window("splash") {
@@ -179,11 +178,7 @@ fn create_tray(app: &mut tauri::App) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left,
-                ..
-            }
-            | TrayIconEvent::DoubleClick {
+            TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
             } => show_main_window(tray.app_handle()),

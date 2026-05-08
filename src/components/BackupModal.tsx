@@ -1,7 +1,7 @@
-import { CloudUploadOutlined, DeleteOutlined, ExportOutlined, FolderOpenOutlined, ImportOutlined, PlayCircleOutlined, RollbackOutlined } from "@ant-design/icons";
-import { App as AntdApp, Button, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag } from "antd";
+import { CloudUploadOutlined, DeleteOutlined, ExportOutlined, FolderOpenOutlined, ImportOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { App as AntdApp, Button, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { AppSettings, BackupRecord, BackupSettings } from "../types";
 import { getErrorMessage } from "../lib/configMapping";
 
@@ -165,13 +165,15 @@ export function BackupModal({
       width: 92,
       render: (_, record) => (
         <Space size={4}>
-          <Button
-            aria-label="恢复此备份"
-            size="small"
-            icon={<RollbackOutlined />}
-            disabled={record.status !== "success"}
-            onClick={() => restoreRecord(record)}
-          />
+          <Tooltip title="恢复此备份" mouseEnterDelay={0.15}>
+            <Button
+              aria-label="恢复此备份"
+              size="small"
+              icon={<ImportOutlined />}
+              disabled={record.status !== "success"}
+              onClick={() => restoreRecord(record)}
+            />
+          </Tooltip>
           <Popconfirm
             title="删除备份记录"
             description={record.targetKind === "local" ? "同时删除本地备份文件。" : "仅删除记录，不会删除云端文件。"}
@@ -179,12 +181,45 @@ export function BackupModal({
             cancelText="取消"
             onConfirm={() => void onDeleteRecord(record.id, record.targetKind === "local")}
           >
-            <Button aria-label="删除备份记录" size="small" icon={<DeleteOutlined />} />
+            <Tooltip title="删除备份记录" mouseEnterDelay={0.15}>
+              <Button aria-label="删除备份记录" size="small" icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
     },
   ];
+
+  const tableComponents = useMemo(() => {
+    const recordMap = new Map(records.map((item) => [item.id, item]));
+    return {
+      body: {
+        row: (rowProps: React.HTMLAttributes<HTMLTableRowElement> & { "data-row-key"?: string }) => {
+          const record = rowProps["data-row-key"] ? recordMap.get(rowProps["data-row-key"]) : undefined;
+          if (!record) return <tr {...rowProps} />;
+          return (
+            <Tooltip
+              mouseEnterDelay={0.4}
+              placement="topLeft"
+              overlayClassName="backupRecordRowTooltip"
+              title={
+                <div className="backupRecordRowTooltipContent">
+                  <div><span>时间</span>{new Date(record.createdAt).toLocaleString()}</div>
+                  <div><span>位置</span>{targetLabel(record.targetKind)}</div>
+                  <div><span>文件</span>{record.fileName}</div>
+                  <div><span>路径</span>{record.targetPath}</div>
+                  <div><span>大小</span>{formatBytes(record.size)}</div>
+                  <div><span>状态</span>{record.status === "success" ? "成功" : "失败"}</div>
+                </div>
+              }
+            >
+              <tr {...rowProps} />
+            </Tooltip>
+          );
+        },
+      },
+    };
+  }, [records]);
 
   return (
     <Modal
@@ -329,10 +364,12 @@ export function BackupModal({
               <Tag>{records.length}</Tag>
             </div>
             <Table
+              className="backupRecordTable"
               rowKey="id"
               size="small"
               columns={columns}
               dataSource={records}
+              components={tableComponents}
               pagination={{ pageSize: 5, hideOnSinglePage: true }}
               scroll={{ x: 720, y: 180 }}
             />

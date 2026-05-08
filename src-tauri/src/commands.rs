@@ -19,6 +19,9 @@ use crate::{
     vault::{VaultStatus, VaultStore, VAULT_FILE_NAME},
 };
 
+const VAULT_PATH_ENV: &str = "HELM_VAULT_PATH";
+const PROXY_KIND_DIRECT: &str = "direct";
+
 pub struct AppState {
     vault: Mutex<VaultStore>,
     remote: RemoteRuntime,
@@ -33,16 +36,13 @@ impl AppState {
     }
 
     fn ensure_vault_unlocked(&self) -> AppResult<()> {
-        let store = self
-            .vault
-            .lock()
-            .map_err(|_| AppError::Io("工作区状态锁已损坏".to_string()))?;
+        let store = self.vault.lock().map_err(lock_poisoned)?;
         store.ensure_unlocked()
     }
 }
 
 pub fn resolve_vault_path(app: &tauri::AppHandle) -> AppResult<PathBuf> {
-    if let Ok(path) = env::var("REMOTEPILOT_VAULT_PATH") {
+    if let Ok(path) = env::var(VAULT_PATH_ENV) {
         return Ok(PathBuf::from(path));
     }
     let config_dir = app
@@ -228,15 +228,7 @@ pub async fn backup_run_now(state: State<'_, AppState>) -> AppResult<ConfigSnaps
             }
             records
         }
-        Err(error) => {
-            backup_outcomes.push(BackupRecord::failed(
-                file_name,
-                "cache",
-                String::new(),
-                format!("刷新备份列表失败: {error}"),
-            ));
-            backup_outcomes
-        }
+        Err(_) => backup_outcomes,
     };
 
     let (snapshot, delete_paths) =
@@ -778,15 +770,16 @@ fn with_store<T>(
     state: &State<'_, AppState>,
     action: impl FnOnce(&mut VaultStore) -> AppResult<T>,
 ) -> AppResult<T> {
-    let mut store = state
-        .vault
-        .lock()
-        .map_err(|_| AppError::Io("工作区状态锁已损坏".to_string()))?;
+    let mut store = state.vault.lock().map_err(lock_poisoned)?;
     action(&mut store)
 }
 
 fn ensure_vault_unlocked(state: &State<'_, AppState>) -> AppResult<()> {
     state.ensure_vault_unlocked()
+}
+
+fn lock_poisoned<T>(_: T) -> AppError {
+    AppError::Crypto("工作区状态锁已损坏".to_string())
 }
 
 async fn connect_session(
@@ -812,20 +805,21 @@ fn session_bundle(
 }
 
 fn apply_global_proxy(session: &mut SessionConfig, settings: &AppSettings) {
-    match session.ssh.proxy.as_ref().map(|proxy| proxy.kind.as_str()) {
-        Some("direct") => session.ssh.proxy = None,
-        Some(_) => {}
-        None => {
-            if let Some(proxy) = &settings.proxy {
-                if proxy.enabled {
-                    session.ssh.proxy = Some(SshProxyOptions {
-                        kind: proxy.kind.clone(),
-                        host: proxy.host.clone(),
-                        port: proxy.port,
-                    });
-                }
-            }
+    if let Some(proxy) = session.ssh.proxy.as_ref() {
+        if proxy.kind == PROXY_KIND_DIRECT {
+            session.ssh.proxy = None;
         }
+        return;
+    }
+    if let Some(proxy) = settings.proxy.as_ref() {
+        if !proxy.enabled {
+            return;
+        }
+        session.ssh.proxy = Some(SshProxyOptions {
+            kind: proxy.kind.clone(),
+            host: proxy.host.clone(),
+            port: proxy.port,
+        });
     }
 }
 

@@ -1,0 +1,24 @@
+[package]
+name = "free-port"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "free-port"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[target.'cfg(windows)'.dependencies]
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_Threading",
+] }

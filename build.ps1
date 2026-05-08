@@ -45,17 +45,39 @@ function Install-NodeDeps {
 }
 
 function Show-Artifact {
-    $exe = Get-ChildItem -Path "$Root\src-tauri\target\release" `
-                         -Filter "helm.exe" -ErrorAction SilentlyContinue |
-           Select-Object -First 1
+    # tauri build 生成安装包在 target/release/bundle 下
+    $bundleDir = "$Root\target\release\bundle"
+    $installers = @()
+    if (Test-Path $bundleDir) {
+        $installers = Get-ChildItem -Path $bundleDir -Recurse `
+                        -Include "*.msi","*.exe","*.nsis" -ErrorAction SilentlyContinue
+    }
+    # 也检查 src-tauri 路径
+    $bundleDir2 = "$Root\src-tauri\target\release\bundle"
+    if (Test-Path $bundleDir2) {
+        $installers += Get-ChildItem -Path $bundleDir2 -Recurse `
+                        -Include "*.msi","*.exe","*.nsis" -ErrorAction SilentlyContinue
+    }
+
     Write-Host ""
-    if ($exe) {
-        Write-Host "✔ 编译成功" -ForegroundColor Green
-        Write-Host "  产物: $($exe.FullName)" -ForegroundColor Yellow
-        $size = [math]::Round($exe.Length / 1MB, 2)
-        Write-Host "  大小: ${size} MB" -ForegroundColor Yellow
+    if ($installers.Count -gt 0) {
+        Write-Host "✔ 编译成功，安装包:" -ForegroundColor Green
+        foreach ($f in $installers) {
+            $size = [math]::Round($f.Length / 1MB, 2)
+            Write-Host "  $($f.FullName)  (${size} MB)" -ForegroundColor Yellow
+        }
     } else {
-        Write-Host "✔ 编译完成（未在 target/release 找到 helm.exe）" -ForegroundColor Yellow
+        # fallback: 找 exe
+        $exe = Get-ChildItem -Path "$Root\target\release","$Root\src-tauri\target\release" `
+                             -Filter "helm.exe" -ErrorAction SilentlyContinue |
+               Select-Object -First 1
+        if ($exe) {
+            $size = [math]::Round($exe.Length / 1MB, 2)
+            Write-Host "✔ 编译成功" -ForegroundColor Green
+            Write-Host "  产物: $($exe.FullName)  (${size} MB)" -ForegroundColor Yellow
+        } else {
+            Write-Host "✔ 编译完成" -ForegroundColor Green
+        }
     }
 }
 
@@ -93,30 +115,90 @@ function Invoke-BuildNormal {
 
 function Invoke-Clean {
     Write-Step "清理编译缓存"
-    $targetDir = "$Root\src-tauri\target"
-    if (Test-Path $targetDir) {
-        $sizeMB = [math]::Round(
-            (Get-ChildItem $targetDir -Recurse -ErrorAction SilentlyContinue |
-             Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-        Write-Host "  目录: $targetDir" -ForegroundColor DarkGray
-        Write-Host "  占用: ${sizeMB} MB" -ForegroundColor DarkGray
-        Write-Host ""
-        $confirm = Read-Host "  确认删除？(y/N)"
-        if ($confirm -match "^[Yy]$") {
-            Push-Location $Root
-            try {
-                cargo clean --manifest-path src-tauri/Cargo.toml
-                if ($LASTEXITCODE -ne 0) { throw "cargo clean 失败" }
-            } finally {
-                Pop-Location
-            }
-            Write-Host "✔ 缓存已清理" -ForegroundColor Green
-        } else {
-            Write-Host "  已取消" -ForegroundColor DarkGray
+
+    # 项目根 .cargo/config.toml 已把 target-dir 重定向到根目录的 target/
+    # 因此真正需要清理的目录分散在多处，逐一收集
+    $candidates = @(
+        @{ Path = "$Root\target";                  Label = "Cargo target (主)" },
+        @{ Path = "$Root\src-tauri\target";        Label = "Cargo target (旧/备用)" },
+        @{ Path = "$Root\tools\free-port\target";  Label = "free-port 工具 target" },
+        @{ Path = "$Root\dist";                    Label = "Vite 构建产物 dist" },
+        @{ Path = "$Root\.vite";                   Label = "Vite 缓存 .vite" },
+        @{ Path = "$Root\node_modules\.vite";      Label = "Vite 模块缓存" },
+        @{ Path = "$Root\test-results";            Label = "Playwright 测试结果" }
+    )
+
+    $present = @()
+    $totalBytes = 0
+    foreach ($entry in $candidates) {
+        if (Test-Path $entry.Path) {
+            $bytes = (Get-ChildItem $entry.Path -Recurse -Force -ErrorAction SilentlyContinue |
+                      Measure-Object -Property Length -Sum).Sum
+            if (-not $bytes) { $bytes = 0 }
+            $entry["Bytes"] = [int64]$bytes
+            $totalBytes += [int64]$bytes
+            $present += $entry
         }
-    } else {
-        Write-Host "  target 目录不存在，无需清理。" -ForegroundColor DarkGray
     }
+
+    if ($present.Count -eq 0) {
+        Write-Host "  没有需要清理的目录。" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host ""
+    foreach ($entry in $present) {
+        $sizeMB = [math]::Round($entry.Bytes / 1MB, 1)
+        Write-Host ("  [{0,7:N1} MB]  {1}" -f $sizeMB, $entry.Path) -ForegroundColor DarkGray
+        Write-Host ("              {0}" -f $entry.Label) -ForegroundColor DarkGray
+    }
+    $totalMB = [math]::Round($totalBytes / 1MB, 1)
+    Write-Host ""
+    Write-Host ("  合计: {0} MB" -f $totalMB) -ForegroundColor Yellow
+    Write-Host ""
+    $confirm = Read-Host "  确认全部删除？(y/N)"
+    if ($confirm -notmatch "^[Yy]$") {
+        Write-Host "  已取消" -ForegroundColor DarkGray
+        return
+    }
+
+    # 优先调用 cargo clean，让 cargo 自己处理 lock/读写权限
+    Push-Location $Root
+    try {
+        if (Test-Path "$Root\src-tauri\Cargo.toml") {
+            Write-Host "  cargo clean (src-tauri)" -ForegroundColor DarkGray
+            cargo clean --manifest-path src-tauri/Cargo.toml 2>$null | Out-Null
+        }
+        if (Test-Path "$Root\tools\free-port\Cargo.toml") {
+            Write-Host "  cargo clean (free-port)" -ForegroundColor DarkGray
+            cargo clean --manifest-path tools/free-port/Cargo.toml 2>$null | Out-Null
+        }
+    } finally {
+        Pop-Location
+    }
+
+    # cargo clean 之后，残留的目录（dist、.vite、test-results 等）逐一删除
+    $failed = @()
+    foreach ($entry in $present) {
+        if (-not (Test-Path $entry.Path)) { continue }
+        try {
+            Remove-Item -Path $entry.Path -Recurse -Force -ErrorAction Stop
+            Write-Host ("  ✔ 已删除  {0}" -f $entry.Path) -ForegroundColor Green
+        } catch {
+            $failed += $entry.Path
+            Write-Host ("  ✗ 失败    {0}  ({1})" -f $entry.Path, $_.Exception.Message) -ForegroundColor Red
+        }
+    }
+
+    Write-Host ""
+    if ($failed.Count -eq 0) {
+        Write-Host "✔ 全部缓存已清理" -ForegroundColor Green
+    } else {
+        Write-Host ("⚠ 有 {0} 个目录未能完全删除（可能被进程占用）。" -f $failed.Count) -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Read-Host "  按回车返回菜单" | Out-Null
 }
 
 # ── 主循环 ────────────────────────────────────────────────
@@ -131,20 +213,14 @@ while ($true) {
         "1" {
             try { Invoke-BuildLTO }
             catch { Write-Host "[错误] $_" -ForegroundColor Red }
-            Write-Host ""
-            Read-Host "按 Enter 返回菜单"
         }
         "2" {
             try { Invoke-BuildNormal }
             catch { Write-Host "[错误] $_" -ForegroundColor Red }
-            Write-Host ""
-            Read-Host "按 Enter 返回菜单"
         }
         "3" {
             try { Invoke-Clean }
             catch { Write-Host "[错误] $_" -ForegroundColor Red }
-            Write-Host ""
-            Read-Host "按 Enter 返回菜单"
         }
         "0" {
             Write-Host "再见。" -ForegroundColor DarkGray

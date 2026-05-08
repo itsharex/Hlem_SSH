@@ -66,6 +66,14 @@ export function getErrorMessage(error: unknown): string {
   return "操作失败";
 }
 
+export function getErrorCode(error: unknown): string | null {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
+  }
+  return null;
+}
+
 function normalizeErrorMessage(message: string) {
   if (message.includes("Failed to open channel") && message.includes("ConnectFailed")) {
     return "远端拒绝打开新的 SSH 通道（ConnectFailed）。SSH 登录可能成功了，但终端、SFTP 或 exec 通道被服务端限制。";

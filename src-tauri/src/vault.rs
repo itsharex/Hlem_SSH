@@ -104,9 +104,7 @@ impl VaultStore {
         current_password: &str,
         new_password: &str,
     ) -> AppResult<ConfigSnapshot> {
-        if new_password.is_empty() {
-            return Err(AppError::InvalidInput("新主密码不能为空".to_string()));
-        }
+        crypto::validate_master_password(new_password)?;
         let encrypted = read_encrypted(&self.path)?;
         crypto::decrypt_with_password(current_password, &encrypted)?;
         let data = self.unlocked()?.data.clone();
@@ -199,8 +197,7 @@ impl VaultStore {
         let unlocked = self.unlocked_mut()?;
         let data = crypto::decrypt_with_key(&unlocked.crypto.key, &encrypted)
             .map_err(backup_decrypt_error)?;
-        let encrypted =
-            crypto::encrypt_with_key(&unlocked.crypto.key, &unlocked.crypto.salt, &data)?;
+        let encrypted = crypto::encrypt_with_session(&unlocked.crypto, &data)?;
         write_encrypted(&vault_path, &encrypted)?;
         unlocked.data = data.clone();
         Ok(ConfigSnapshot { data })
@@ -414,8 +411,7 @@ impl VaultStore {
         update(&mut unlocked.data)?;
         unlocked.data.touch();
         let snapshot = unlocked.data.clone();
-        let encrypted =
-            crypto::encrypt_with_key(&unlocked.crypto.key, &unlocked.crypto.salt, &snapshot)?;
+        let encrypted = crypto::encrypt_with_session(&unlocked.crypto, &snapshot)?;
         write_encrypted(&self.path, &encrypted)?;
         Ok(ConfigSnapshot { data: snapshot })
     }
