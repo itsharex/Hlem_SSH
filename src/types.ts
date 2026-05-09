@@ -97,6 +97,12 @@ export interface AppSettings {
   proxy?: AppProxyOptions | null;
   backup: BackupSettings;
   quickCommands?: QuickCommand[];
+  terminalInputHistory?: TerminalInputHistoryEntry[];
+}
+
+export interface TerminalInputHistoryEntry {
+  command: string;
+  timestamp: number;
 }
 
 export interface QuickCommand {

@@ -1,4 +1,4 @@
-import { ClearOutlined, FileTextOutlined, HistoryOutlined } from "@ant-design/icons";
+import { ClearOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import { FitAddon } from "@xterm/addon-fit";
@@ -11,10 +11,12 @@ import type { RemoteSession, TerminalEntry } from "../types";
 
 interface TerminalPanelProps {
   session: RemoteSession;
+  inputHistory: InputHistoryEntry[];
   onSendData: (data: string) => void;
   onSendCommand: (command: string) => void;
   onResize: (cols: number, rows: number) => void;
   onClear: () => void;
+  onInputHistoryChange: (history: InputHistoryEntry[]) => void;
 }
 
 type AppliedTerminalState = {
@@ -29,10 +31,11 @@ type InputHistoryEntry = {
 
 const INPUT_HISTORY_LIMIT = 15;
 
-export function TerminalPanel({ session, onSendData, onSendCommand, onResize, onClear }: TerminalPanelProps) {
+export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onSendCommand, onResize, onClear, onInputHistoryChange }: TerminalPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; selectedText: string } | null>(null);
   const [actionFlash, setActionFlash] = useState<"paste" | "copyAll" | "clear" | "history" | null>(null);
-  const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => loadInputHistory(session.id));
+  const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => mergeInputHistory(loadInputHistory(), inputHistoryProp));
+  const onInputHistoryChangeRef = useRef(onInputHistoryChange);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [inputScrollLeft, setInputScrollLeft] = useState(0);
@@ -55,6 +58,10 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
   const connectedRef = useRef(connected);
 
   inputHistoryRef.current = inputHistory;
+
+  useEffect(() => {
+    onInputHistoryChangeRef.current = onInputHistoryChange;
+  }, [onInputHistoryChange]);
 
   useEffect(() => {
     return () => {
@@ -83,7 +90,7 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
   }, [connected]);
 
   useEffect(() => {
-    setInputHistory(loadInputHistory(session.id));
+    setInputHistory(mergeInputHistory(loadInputHistory(), inputHistoryProp));
     setHistoryOpen(false);
     historyDraftRef.current = "";
     historyCursorRef.current = null;
@@ -310,7 +317,8 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
     if (!connectedRef.current) return;
     const value = inputValue;
     if (value.length === 0) return;
-    const data = `${value}\n`;
+    // Ctrl+U 清空 shell 当前输入行，再发完整命令和回车，保证 shell 显示的命令与本地输入框一致
+    const data = `\x15${value}\r`;
     trackInputEcho(data);
     sendDataRef.current(data);
     setInputHistory((prev) => {
@@ -318,7 +326,8 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
         ...prev.filter((entry) => entry.command !== value),
         { command: value, timestamp: Date.now() },
       ].slice(-INPUT_HISTORY_LIMIT);
-      saveInputHistory(session.id, next);
+      saveInputHistory(next);
+      onInputHistoryChangeRef.current(next);
       return next;
     });
     setInputValue("");
@@ -342,6 +351,15 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
     });
   }
 
+  /**
+   * 将本地输入框的当前文本镜像到 SSH shell：先 Ctrl+U 清空 shell 行，再写入新内容。
+   * 这样用户按上/下键切换历史时，shell 提示符后会同步显示当前命令。
+   */
+  function mirrorToShell(_value: string) {
+    // Disabled: mirroring to shell while browsing history causes prompt corruption.
+    // The shell will receive the final command on Enter via submitInput().
+  }
+
   function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -356,7 +374,9 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
       if (cursor === null) historyDraftRef.current = event.currentTarget.value;
       const next = cursor === null ? history.length - 1 : Math.max(cursor - 1, 0);
       historyCursorRef.current = next;
-      setInputText(history[next]?.command ?? "");
+      const command = history[next]?.command ?? "";
+      setInputText(command);
+      mirrorToShell(command);
       return;
     }
     if (event.key === "ArrowDown") {
@@ -366,11 +386,15 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
       const next = cursor + 1;
       if (next >= inputHistoryRef.current.length) {
         historyCursorRef.current = null;
-        setInputText(historyDraftRef.current);
+        const draft = historyDraftRef.current;
+        setInputText(draft);
+        mirrorToShell(draft);
         historyDraftRef.current = "";
       } else {
         historyCursorRef.current = next;
-        setInputText(inputHistoryRef.current[next]?.command ?? "");
+        const command = inputHistoryRef.current[next]?.command ?? "";
+        setInputText(command);
+        mirrorToShell(command);
       }
       return;
     }
@@ -380,7 +404,8 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
       setInputScrollLeft(0);
       historyCursorRef.current = null;
       historyDraftRef.current = "";
-      inputRef.current?.focus();
+      mirrorToShell("");
+      terminalRef.current?.focus();
     }
   }
 
@@ -390,7 +415,8 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
         ...prev.filter((item) => item.command !== entry),
         { command: entry, timestamp: Date.now() },
       ].slice(-INPUT_HISTORY_LIMIT);
-      saveInputHistory(session.id, next);
+      saveInputHistory(next);
+      onInputHistoryChangeRef.current(next);
       return next;
     });
     if (connectedRef.current) {
@@ -459,6 +485,15 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
     return output;
   }
 
+  function deleteHistoryEntry(index: number) {
+    setInputHistory((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      saveInputHistory(next);
+      onInputHistoryChangeRef.current(next);
+      return next;
+    });
+  }
+
   const historyMenuItems = useMemo<MenuProps["items"]>(
     () =>
       inputHistory.length === 0
@@ -469,6 +504,13 @@ export function TerminalPanel({ session, onSendData, onSendCommand, onResize, on
               <span className="terminalHistoryTimelineItem">
                 <span className="terminalHistoryTime">{formatHistoryTime(entry.timestamp)}</span>
                 <span className="terminalHistoryItem">{entry.command}</span>
+                <DeleteOutlined
+                  className="terminalHistoryDelete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteHistoryEntry(index);
+                  }}
+                />
               </span>
             ),
           })),
@@ -736,14 +778,12 @@ function terminalBufferText(terminal: XtermTerminal) {
   return lines.join("\n").replace(/\s+$/g, "");
 }
 
-function inputHistoryStorageKey(sessionId: string) {
-  return `helm:terminalInputHistory:${sessionId}`;
-}
+const INPUT_HISTORY_STORAGE_KEY = "helm:terminalInputHistory";
 
-function loadInputHistory(sessionId: string): InputHistoryEntry[] {
+function loadInputHistory(): InputHistoryEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(inputHistoryStorageKey(sessionId));
+    const raw = window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -767,12 +807,12 @@ function loadInputHistory(sessionId: string): InputHistoryEntry[] {
   }
 }
 
-function saveInputHistory(sessionId: string, history: InputHistoryEntry[]) {
+function saveInputHistory(history: InputHistoryEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(inputHistoryStorageKey(sessionId), JSON.stringify(history));
+    window.localStorage.setItem(INPUT_HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch {
-    /* localStorage may be unavailable (private mode, quota); ignore */
+    /* localStorage 可能不可用（隐私模式、配额不足）；忽略 */
   }
 }
 
@@ -782,18 +822,35 @@ function isInputHistoryEntry(item: unknown): item is InputHistoryEntry {
   return typeof entry.command === "string" && typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp);
 }
 
+/**
+ * 合并 localStorage 本地历史与 vault 中持久化的历史，
+ * 去重后按时间升序排列，保留最新的 INPUT_HISTORY_LIMIT 条。
+ */
+function mergeInputHistory(local: InputHistoryEntry[], vault: InputHistoryEntry[]): InputHistoryEntry[] {
+  const map = new Map<string, InputHistoryEntry>();
+  for (const entry of [...local, ...vault]) {
+    const existing = map.get(entry.command);
+    if (!existing || entry.timestamp > existing.timestamp) {
+      map.set(entry.command, entry);
+    }
+  }
+  return Array.from(map.values())
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(-INPUT_HISTORY_LIMIT);
+}
+
+/** 格式化历史时间为北京时间 MM-DD HH:mm */
+const historyTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 function formatHistoryTime(timestamp: number) {
   const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) return "--:--";
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  if (sameDay) return `${hours}:${minutes}`;
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${month}-${day} ${hours}:${minutes}`;
+  if (!Number.isFinite(date.getTime())) return "--/-- --:--";
+  return historyTimeFormatter.format(date);
 }

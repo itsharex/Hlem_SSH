@@ -68,15 +68,15 @@ const TELEMETRY_IP_MIN_INTERVAL_MS: u64 = 600_000;
 const TELEMETRY_FAST_TIMEOUT_MS: u64 = 8_000;
 const TELEMETRY_SLOW_TIMEOUT_MS: u64 = 12_000;
 const MAX_SFTP_TRANSFER_CONCURRENCY: usize = 12;
-const SFTP_TRANSFER_POOL_SIZE: usize = 4;
+const SFTP_TRANSFER_POOL_SIZE: usize = 6;
 const SFTP_OWNER_LOOKUP_TIMEOUT_MS: u64 = 1_500;
 const MAX_SFTP_SEARCH_CONCURRENCY: usize = 12;
 const MAX_SFTP_SEARCH_DIRS: usize = 800;
 const MAX_SFTP_SEARCH_ENTRIES: usize = 6000;
 const SFTP_REMOTE_SEARCH_TIMEOUT_MS: u64 = 3_500;
 const MAX_TRANSFER_HISTORY: usize = 12;
-const TRANSFER_BUFFER_BYTES: usize = 512 * 1024;
-const TRANSFER_ACCELERATED_BUFFER_BYTES: usize = 2 * 1024 * 1024;
+const TRANSFER_BUFFER_BYTES: usize = 1024 * 1024;
+const TRANSFER_ACCELERATED_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 const TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(250);
 const TRANSFER_PROGRESS_MIN_BYTES: u64 = 1024 * 1024;
 const TELEMETRY_BASE_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
@@ -378,21 +378,24 @@ struct TerminalRecord {
 #[derive(Clone)]
 struct SftpRecord {
     info: SftpInfo,
+    connection_id: String,
     session: Arc<SftpSession>,
-    transfer_sessions: Vec<Arc<SftpSession>>,
+    transfer_sessions: Arc<RwLock<Vec<Arc<SftpSession>>>>,
     transfer_cursor: Arc<Mutex<usize>>,
     transfer_slots: Arc<Semaphore>,
+    pool_ready: Arc<AtomicBool>,
 }
 
 impl SftpRecord {
     async fn next_transfer_session(&self) -> Arc<SftpSession> {
-        if self.transfer_sessions.is_empty() {
+        let sessions = self.transfer_sessions.read().await;
+        if sessions.is_empty() {
             return self.session.clone();
         }
         let mut cursor = self.transfer_cursor.lock().await;
-        let index = *cursor % self.transfer_sessions.len();
+        let index = *cursor % sessions.len();
         *cursor = cursor.wrapping_add(1);
-        self.transfer_sessions[index].clone()
+        sessions[index].clone()
     }
 }
 

@@ -357,8 +357,10 @@
 
 .pathTreeRoot:hover,
 .pathTreeRoot-selected {
-  background: linear-gradient(135deg, rgba(99, 102, 241, .1) 0%, rgba(139, 92, 246, .08) 100%) !important;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .12) 0%, rgba(139, 92, 246, .1) 100%) !important;
+  border-color: rgba(99, 102, 241, .35) !important;
   color: var(--accent) !important;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, .12);
 }
 
 .sessionListModalItem {
@@ -366,10 +368,10 @@
 }
 
 .sessionListModalItem:hover {
-  transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, .4) !important;
-  background: linear-gradient(135deg, #ffffff 0%, var(--accent-light) 100%) !important;
-  box-shadow: 0 12px 28px -8px rgba(99, 102, 241, .25);
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, .35) !important;
+  background: linear-gradient(135deg, #fafbff 0%, #f5f3ff 100%) !important;
+  box-shadow: 0 8px 24px -8px rgba(99, 102, 241, .15);
 }
 
 .transferDrawer.ant-drawer-content {

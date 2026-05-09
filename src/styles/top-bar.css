@@ -137,6 +137,31 @@
 
 .sessionTabs .ant-tabs-nav::before { border-color: transparent !important; }
 
+.sessionTabs .ant-tabs-ink-bar { display: none !important; }
+
+.sessionTabs .ant-tabs-tab .ant-tabs-tab-remove {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.sessionTabs .ant-tabs-tab .ant-tabs-tab-remove:hover,
+.sessionTabs .ant-tabs-tab .ant-tabs-tab-remove:focus {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 .sessionTabs .ant-tabs-nav-list {
   height: 52px;
   align-items: center;
@@ -253,14 +278,10 @@
 }
 
 .sessionTabs .ant-tabs-tab .anticon-close {
-  position: absolute;
-  right: 6px;
-  top: 50%;
   color: var(--text-muted) !important;
   font-size: 10px;
   margin-left: 0;
   opacity: 0;
-  transform: translateY(-50%);
   transition: all 0.18s;
   padding: 3px;
   border-radius: 4px;
@@ -271,7 +292,7 @@
   opacity: .85;
 }
 
-.sessionTabs .ant-tabs-tab .anticon-close:hover {
+.sessionTabs .ant-tabs-tab .ant-tabs-tab-remove:hover .anticon-close {
   opacity: 1 !important;
   color: var(--danger) !important;
   background: rgba(239, 68, 68, 0.1);

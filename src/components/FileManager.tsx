@@ -21,6 +21,7 @@ import {
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
+  UpOutlined,
 } from "@ant-design/icons";
 import { App as AntdApp, Button, Dropdown, Form, Input, Modal, Radio, Space, Spin, Table, Tooltip, Tree } from "antd";
 import type { MenuProps } from "antd";
@@ -240,7 +241,7 @@ export function FileManager({
   const commandItems = useMemo(
     () =>
       [...quickCommands]
-        .sort((a, b) => b.clickCount - a.clickCount || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })),
+        .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")),
     [quickCommands],
   );
 
@@ -603,7 +604,6 @@ export function FileManager({
     }
     try {
       await onSendCommand(command.command);
-      setQuickCommandOpen(false);
       void onQuickCommandsChange(
         quickCommands.map((item) =>
           item.id === command.id ? { ...item, clickCount: (item.clickCount ?? 0) + 1, updatedAt: new Date().toISOString() } : item,
@@ -616,7 +616,6 @@ export function FileManager({
   }
 
   function openCommandDialog(command?: QuickCommand) {
-    setQuickCommandOpen(false);
     setCommandEditingId(command?.id ?? null);
     setCommandName(command?.name ?? "");
     setCommandValue(command?.command ?? "");
@@ -636,17 +635,15 @@ export function FileManager({
     } else {
       const now = new Date().toISOString();
       const id = crypto.randomUUID();
-      void onQuickCommandsChange([{ id, name, command, clickCount: 0, createdAt: now, updatedAt: now }, ...quickCommands].slice(0, 100));
+      void onQuickCommandsChange([...quickCommands, { id, name, command, clickCount: 0, createdAt: now, updatedAt: now }].slice(-100));
     }
     setCommandName("");
     setCommandValue("");
     setCommandEditingId(null);
     setCommandDialogOpen(false);
-    setQuickCommandOpen(false);
   }
 
   function deleteQuickCommand(command: QuickCommand) {
-    setQuickCommandOpen(false);
     modal.confirm({
       title: "删除常用命令",
       content: command.name,
@@ -655,7 +652,6 @@ export function FileManager({
       cancelText: "取消",
       onOk: () => {
         void onQuickCommandsChange(quickCommands.filter((item) => item.id !== command.id));
-        setQuickCommandOpen(false);
       },
     });
   }
@@ -726,80 +722,20 @@ export function FileManager({
   return (
     <section className="filePanel">
       <div className="fileWorkspace">
+        <div className="fileTopArea">
         <div className="fileToolbar">
           <Space className="fileToolbarActions" size={4}>
-            <Dropdown
-              trigger={["click"]}
-              overlayClassName="quickCommandDropdown"
-              open={quickCommandOpen}
-              onOpenChange={setQuickCommandOpen}
-              popupRender={() => (
-                <div className="quickCommandDropdownPanel">
-                  <div className="quickCommandScrollList">
-                    {commandItems.length === 0 ? (
-                      <div className="quickCommandEmpty">暂无命令</div>
-                    ) : (
-                      commandItems.map((item) => (
-                        <Tooltip
-                          key={item.id}
-                          title={quickCommandDetailTooltip(item)}
-                          placement="left"
-                          overlayClassName="detailHoverTooltip"
-                        >
-                          <button
-                            type="button"
-                            className="quickCommandRow"
-                            onClick={() => void sendQuickCommand(item)}
-                          >
-                            <span className="quickCommandMenuText">
-                              <span>{item.name}</span>
-                              <small>{item.command}</small>
-                            </span>
-                            <span className="quickCommandMenuActions">
-                              <Button
-                                aria-label={`编辑 ${item.name}`}
-                                size="small"
-                                type="text"
-                                icon={<EditOutlined />}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openCommandDialog(item);
-                                }}
-                              />
-                              <Button
-                                aria-label={`删除 ${item.name}`}
-                                size="small"
-                                type="text"
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  deleteQuickCommand(item);
-                                }}
-                              />
-                            </span>
-                          </button>
-                        </Tooltip>
-                      ))
-                    )}
-                  </div>
-                  <button type="button" className="quickCommandAdd" onClick={() => openCommandDialog()}>
-                    <PlusOutlined />
-                    <span>添加命令</span>
-                  </button>
-                </div>
-              )}
-            >
+            <Tooltip title="常用命令">
               <Button
                 aria-label="常用命令"
-                title="常用命令"
-                className="fileCommandDropdownButton"
+                className={`fileCommandDropdownButton${quickCommandOpen ? " fileCommandDropdownButton-active" : ""}`}
                 icon={<CodeOutlined />}
                 size="small"
+                onClick={() => setQuickCommandOpen((prev) => !prev)}
               >
-                <DownOutlined className="fileToolbarDropdownArrow" />
+                {quickCommandOpen ? <UpOutlined className="fileToolbarDropdownArrow" /> : <DownOutlined className="fileToolbarDropdownArrow" />}
               </Button>
-            </Dropdown>
+            </Tooltip>
             <Input
               size="small"
               placeholder="搜索文件"
@@ -840,6 +776,69 @@ export function FileManager({
               />
             </Tooltip>
           </Space>
+        </div>
+
+        {/* 常用命令折叠抽屉面板 - 向下展开 */}
+        <div className={`quickCommandDrawer${quickCommandOpen ? " quickCommandDrawer-open" : ""}`}>
+            <div className="quickCommandDrawerHeader">
+              <span className="quickCommandDrawerTitle">
+                <CodeOutlined />
+                常用命令
+                <small>({commandItems.length})</small>
+              </span>
+              <button type="button" className="quickCommandAdd" onClick={() => openCommandDialog()}>
+                <PlusOutlined />
+                <span>添加</span>
+              </button>
+            </div>
+            <div className="quickCommandScrollList">
+              {commandItems.length === 0 ? (
+                <div className="quickCommandEmpty">暂无命令，点击上方添加</div>
+              ) : (
+                commandItems.map((item) => (
+                  <Tooltip
+                    key={item.id}
+                    title={quickCommandDetailTooltip(item)}
+                    placement="bottom"
+                    overlayClassName="detailHoverTooltip"
+                  >
+                    <span
+                      className="quickCommandTag"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => void sendQuickCommand(item)}
+                      onKeyDown={(event) => { if (event.key === "Enter") void sendQuickCommand(item); }}
+                    >
+                      {item.name}
+                      <span className="quickCommandTagActions">
+                        <Button
+                          aria-label={`编辑 ${item.name}`}
+                          size="small"
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openCommandDialog(item);
+                          }}
+                        />
+                        <Button
+                          aria-label={`删除 ${item.name}`}
+                          size="small"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteQuickCommand(item);
+                          }}
+                        />
+                      </span>
+                    </span>
+                  </Tooltip>
+                ))
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="fileContent" ref={contentRef}>
@@ -1351,22 +1350,12 @@ function quickCommandDetailTooltip(command: QuickCommand) {
     <div className="detailHoverPanel">
       <div className="detailHoverTitle">{command.name}</div>
       <div className="detailHoverCommand">{command.command}</div>
-      <div className="detailHoverGrid">
-        <span>点击次数</span>
-        <strong>{command.clickCount ?? 0}</strong>
-        {command.updatedAt && (
-          <>
-            <span>更新时间</span>
-            <strong>{formatBeijingModifiedTime(command.updatedAt)}</strong>
-          </>
-        )}
-        {command.createdAt && (
-          <>
-            <span>创建时间</span>
-            <strong>{formatBeijingModifiedTime(command.createdAt)}</strong>
-          </>
-        )}
-      </div>
+      {command.createdAt && (
+        <div className="detailHoverGrid">
+          <span>创建时间</span>
+          <strong>{formatBeijingModifiedTime(command.createdAt)}</strong>
+        </div>
+      )}
     </div>
   );
 }

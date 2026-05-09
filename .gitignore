@@ -13,3 +13,5 @@ __pycache__
 *.pyc
 *.bak
 *.orig
+1.txt
+/.claude

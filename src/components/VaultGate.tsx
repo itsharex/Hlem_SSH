@@ -63,7 +63,7 @@ export function VaultGate({ open, mode, loading, error, onCreate, onUnlock }: Va
         <div className="vaultIcon">
           <img src="./nexus_icon.svg" alt="" aria-hidden="true" />
         </div>
-        <h1>{isCreate ? "设置本机主密码" : "输入本机主密码"}</h1>
+        <h1>{isCreate ? "设置本机主密码" : "输入解锁密码"}</h1>
         <p>
           {isCreate
             ? "主密码用于保护本机会话数据，无法找回，请妥善保管。"

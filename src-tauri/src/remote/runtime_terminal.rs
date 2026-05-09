@@ -20,6 +20,11 @@ impl RemoteRuntime {
             .map_err(remote_error)?;
 
         let terminal_id = Uuid::new_v4().to_string();
+        // Inherit the friendly session label from the parent connection so "terminal not
+        // found" logs show the session name instead of a UUID.
+        if let Some(label) = crate::errors::resource_label(connection_id) {
+            crate::errors::register_resource_label(&terminal_id, &label);
+        }
         let writer = Arc::new(Mutex::new(write_half));
         let info = TerminalInfo {
             terminal_id: terminal_id.clone(),
@@ -79,6 +84,15 @@ impl RemoteRuntime {
         if let Err(error) = shell_result {
             self.terminals.write().await.remove(&terminal_id);
             return Err(error);
+        }
+
+        // Send a window-change after shell starts to trigger prompt output.
+        // Some shells wait for SIGWINCH before rendering the initial prompt.
+        {
+            let writer = writer.lock().await;
+            let _ = writer
+                .window_change(cols as u32, rows as u32, 0, 0)
+                .await;
         }
 
         Ok(info)

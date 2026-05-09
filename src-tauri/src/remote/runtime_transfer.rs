@@ -155,6 +155,11 @@ impl RemoteRuntime {
             created_at: now(),
             updated_at: now(),
         };
+        // Inherit the friendly session label from the parent SFTP session so "transfer not
+        // found" logs show the session name instead of a UUID.
+        if let Some(label) = crate::errors::resource_label(&info.sftp_id) {
+            crate::errors::register_resource_label(&info.transfer_id, &label);
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let runtime = self.clone();

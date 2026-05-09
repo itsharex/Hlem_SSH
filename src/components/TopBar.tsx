@@ -1,5 +1,7 @@
 import {
   ApiOutlined,
+  AppstoreOutlined,
+  DisconnectOutlined,
   EditOutlined,
   LeftOutlined,
   LockOutlined,
@@ -23,6 +25,7 @@ interface TopBarProps {
   onClose: (id: string) => void;
   onEdit: (id: string) => void;
   onConnect: (session: RemoteSession) => void;
+  onDisconnect: (session: RemoteSession) => void;
   onLock: () => void;
   onTransferOpen: () => void;
   onSettingsOpen: () => void;
@@ -41,6 +44,7 @@ export function TopBar({
   onClose,
   onEdit,
   onConnect,
+  onDisconnect,
   onLock,
   onTransferOpen,
   onSettingsOpen,
@@ -117,7 +121,7 @@ export function TopBar({
               <Button
                 aria-label="会话列表"
                 className="sessionTabsListButton"
-                icon={<PlusOutlined />}
+                icon={<AppstoreOutlined />}
                 size="small"
                 onClick={() => onSessionListOpenChange(true)}
               />
@@ -128,6 +132,18 @@ export function TopBar({
         size="small"
         activeKey={activeSessionId}
         onChange={onActivate}
+        onTabClick={(key) => {
+          if (key === activeSessionId) {
+            const session = tabSessions.find((s) => s.id === key);
+            if (!session) return;
+            const state = sessionState(session, connectingSessionId);
+            if (state === "connected") {
+              onDisconnect(session);
+            } else if (state === "disconnected" || state === "failed") {
+              onConnect(session);
+            }
+          }
+        }}
         onEdit={(targetKey, action) => {
           if (action === "add") onAdd();
           if (action === "remove" && typeof targetKey === "string")
@@ -218,16 +234,20 @@ export function TopBar({
                   </span>
                 </span>
                 <span className="sessionListModalActions">
-                  <Tooltip title={connected ? "已连接" : "连接"}>
+                  <Tooltip title={connected ? "断开连接" : "连接"}>
                     <Button
-                      aria-label={`连接 ${session.name}`}
-                      icon={<ApiOutlined />}
+                      aria-label={connected ? `断开 ${session.name}` : `连接 ${session.name}`}
+                      icon={connected ? <DisconnectOutlined /> : <ApiOutlined />}
                       size="small"
                       loading={connecting}
-                      disabled={connected}
+                      danger={connected}
                       onClick={(event) => {
                         event.stopPropagation();
-                        openSessionFromList(session);
+                        if (connected) {
+                          onDisconnect(session);
+                        } else {
+                          openSessionFromList(session);
+                        }
                       }}
                     />
                   </Tooltip>

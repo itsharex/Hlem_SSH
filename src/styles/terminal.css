@@ -135,15 +135,31 @@
 .terminalHistoryTimelineItem {
   position: relative;
   display: grid;
-  grid-template-columns: 62px minmax(0, 190px);
+  grid-template-columns: 96px minmax(0, 1fr) 16px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   min-width: 0;
-  max-width: 260px;
+  max-width: 300px;
   min-height: 28px;
   padding-left: 16px;
   box-sizing: border-box;
+}
+
+.terminalHistoryDelete {
+  font-size: 11px;
+  color: rgba(100, 116, 139, .5);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+}
+
+.terminalHistoryDropdown .ant-dropdown-menu-item:hover .terminalHistoryDelete {
+  opacity: 1;
+}
+
+.terminalHistoryDelete:hover {
+  color: #dc2626;
 }
 
 .terminalHistoryTimelineItem::before {
@@ -183,7 +199,6 @@
   display: inline-block;
   width: 100%;
   min-width: 0;
-  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -193,8 +208,8 @@
 }
 
 .terminalHistoryDropdown .ant-dropdown-menu {
-  width: 292px;
-  max-width: 292px;
+  width: 340px;
+  max-width: 340px;
   max-height: min(360px, calc(100vh - 180px));
   overflow-y: auto;
   overflow-x: hidden;

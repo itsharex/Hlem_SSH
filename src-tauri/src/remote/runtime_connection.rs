@@ -14,6 +14,12 @@ impl RemoteRuntime {
         }
 
         let connection_id = Uuid::new_v4().to_string();
+        // Register the friendly session name so any future "not found" diagnostics log it
+        // instead of the raw UUID. The same label is also reused for the session id so
+        // per-session error paths (connection_lock, find_connection_by_session, etc.) produce
+        // useful output too.
+        crate::errors::register_resource_label(&connection_id, &session.name);
+        crate::errors::register_resource_label(&session.id, &session.name);
         let remote_forwards = Arc::new(RwLock::new(HashMap::new()));
         let verification = HostKeyVerification {
             session_id: session.id.clone(),
@@ -68,6 +74,10 @@ impl RemoteRuntime {
             session.ssh.keepalive_interval_sec.max(1) as u64,
         ));
         config.keepalive_max = 3;
+        config.nodelay = true;
+        config.window_size = 16 * 1024 * 1024; // 16 MB - larger window for better throughput
+        config.maximum_packet_size = 65535; // max SSH packet size for fewer round trips
+        config.channel_buffer_size = 256; // larger channel buffer to reduce backpressure
         let connect_timeout = Duration::from_millis(session.ssh.connect_timeout_ms.max(1_000));
         let server_host = session.host.clone();
         let server_port = session.port;
@@ -146,6 +156,7 @@ impl RemoteRuntime {
         let mut info = record.info;
         info.status = RuntimeStatus::Disconnected;
         events::emit(app, events::SSH_STATUS, info);
+        crate::errors::forget_resource_label(connection_id);
         disconnect_result
     }
 

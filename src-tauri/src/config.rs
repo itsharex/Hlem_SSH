@@ -116,6 +116,15 @@ pub struct AppSettings {
     pub backup: BackupSettings,
     #[serde(default)]
     pub quick_commands: Vec<QuickCommand>,
+    #[serde(default)]
+    pub terminal_input_history: Vec<TerminalInputHistoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInputHistoryEntry {
+    pub command: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -610,6 +619,11 @@ pub fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     }
     validate_backup_settings(&settings.backup)?;
     validate_quick_commands(&settings.quick_commands)?;
+    if settings.terminal_input_history.len() > 500 {
+        return Err(AppError::InvalidInput(
+            "命令输入历史最多保留 500 条".to_string(),
+        ));
+    }
     Ok(())
 }
 

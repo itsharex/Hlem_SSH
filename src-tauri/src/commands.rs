@@ -287,6 +287,12 @@ pub async fn backup_record_delete(
 }
 
 #[tauri::command]
+pub fn backup_records_clear(state: State<'_, AppState>) -> AppResult<ConfigSnapshot> {
+    let (snapshot, _) = with_store(&state, |store| store.replace_backup_records(Vec::new()))?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
 pub fn group_create(state: State<'_, AppState>, input: GroupInput) -> AppResult<ConfigSnapshot> {
     with_store(&state, |store| store.create_group(input))
 }

@@ -79,6 +79,7 @@ impl RemoteRuntime {
             if let Some(record) = self.terminals.write().await.remove(&id) {
                 let terminal_id = record.info.terminal_id.clone();
                 let _ = close_terminal_record(record).await;
+                crate::errors::forget_resource_label(&terminal_id);
                 emit_terminal_closed(app, terminal_id);
             }
         }
@@ -179,6 +180,7 @@ impl RemoteRuntime {
         let mut sessions = self.sftp_sessions.write().await;
         for id in &sftp_ids {
             sessions.remove(id);
+            crate::errors::forget_resource_label(id);
         }
         sftp_ids
     }
@@ -200,6 +202,7 @@ impl RemoteRuntime {
         for id in transfer_ids {
             if let Some(record) = transfers.remove(&id) {
                 cancel_transfer_record(app, record, reason);
+                crate::errors::forget_resource_label(&id);
             }
         }
     }

@@ -1,5 +1,43 @@
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+
 use serde::Serialize;
 use thiserror::Error;
+
+/// Global registry mapping runtime resource UUIDs (connection, terminal, sftp, transfer,
+/// telemetry, forward ids) to a human-readable session name. Populated when a resource is
+/// created and consulted when building error logs so stderr shows the session the user knows
+/// about instead of an opaque UUID.
+fn label_registry() -> &'static RwLock<HashMap<String, String>> {
+    static REGISTRY: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Associate a resource id with a friendly session name. Safe to call repeatedly.
+pub fn register_resource_label(id: &str, name: &str) {
+    if id.is_empty() || name.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = label_registry().write() {
+        guard.insert(id.to_string(), name.to_string());
+    }
+}
+
+/// Forget a resource id. Called when the resource is removed so the registry doesn't grow
+/// unbounded.
+pub fn forget_resource_label(id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = label_registry().write() {
+        guard.remove(id);
+    }
+}
+
+/// Look up the friendly label for a resource id, if any was registered.
+pub fn resource_label(id: &str) -> Option<String> {
+    label_registry().read().ok()?.get(id).cloned()
+}
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -60,9 +98,13 @@ impl From<serde_json::Error> for AppError {
 impl AppError {
     /// User-friendly NotFound for a runtime resource. The raw `id` (typically a UUID) is
     /// written to stderr so it stays available for debugging, while the toast in the UI
-    /// only sees `friendly`.
+    /// only sees `friendly`. If a session name has been registered for the id via
+    /// [`register_resource_label`], the log line uses that name instead of the UUID.
     fn runtime_missing(kind: &str, id: &str, friendly: &str) -> Self {
-        eprintln!("[helm] {} not found: {}", kind, id);
+        match resource_label(id) {
+            Some(label) => eprintln!("[helm] {} not found: {}", kind, label),
+            None => eprintln!("[helm] {} not found: {}", kind, id),
+        }
         AppError::NotFound(friendly.to_string())
     }
 

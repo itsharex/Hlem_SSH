@@ -31,6 +31,8 @@ export const vaultApi = {
     call<ConfigSnapshot>("backup_record_restore", () => browserUnavailable("备份记录恢复"), { recordId }),
   backupRecordDelete: (recordId: string, deleteFile = false) =>
     call<ConfigSnapshot>("backup_record_delete", () => browserBackupRecordDelete(recordId), { recordId, deleteFile }),
+  backupRecordsClear: () =>
+    call<ConfigSnapshot>("backup_records_clear", browserBackupRecordsClear),
   settingsUpdate: (settings: AppSettings) =>
     call<ConfigSnapshot>("settings_update", () => browserSettingsUpdate(settings), { settings }),
   groupCreate: (input: GroupInput) => call<ConfigSnapshot>("group_create", () => browserGroupCreate(input), { input }),
@@ -155,6 +157,12 @@ function browserBackupRunNow(): ConfigSnapshot {
 function browserBackupRecordDelete(recordId: string): ConfigSnapshot {
   return browserMutate((data) => {
     data.backupRecords = (data.backupRecords ?? []).filter((record) => record.id !== recordId);
+  });
+}
+
+function browserBackupRecordsClear(): ConfigSnapshot {
+  return browserMutate((data) => {
+    data.backupRecords = [];
   });
 }
 

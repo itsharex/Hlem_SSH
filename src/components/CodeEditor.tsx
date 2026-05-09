@@ -12,7 +12,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import CodeMirror from "@uiw/react-codemirror";
-import { undo as undoCommand } from "@codemirror/commands";
+import { undo as undoCommand, undoDepth } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -68,10 +68,30 @@ export function CodeEditor({
   const [replacement, setReplacement] = useState("");
   const [line, setLine] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
   const largeDocument = useMemo(() => isLargeDocument(value), [value]);
+
+  useEffect(() => {
+    setCanUndo(false);
+    canUndoRef.current = false;
+  }, [path]);
+  const canUndoRef = useRef(false);
+  const undoTracker = useMemo(
+    () =>
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged || update.transactions.some((tr) => tr.annotation !== undefined)) {
+          const depth = undoDepth(update.state);
+          if (depth > 0 !== canUndoRef.current) {
+            canUndoRef.current = depth > 0;
+            setCanUndo(depth > 0);
+          }
+        }
+      }),
+    [],
+  );
   const extensions = useMemo(
-    () => [languageExtension(path), EditorView.lineWrapping, keymap.of(searchKeymap)].filter(Boolean) as Extension[],
-    [path],
+    () => [languageExtension(path), EditorView.lineWrapping, keymap.of(searchKeymap), undoTracker].filter(Boolean) as Extension[],
+    [path, undoTracker],
   );
   const canFormatJson = useMemo(() => path.toLowerCase().endsWith(".json"), [path]);
 
@@ -159,7 +179,12 @@ export function CodeEditor({
   function undoLastEdit() {
     const view = viewRef.current;
     if (!view || readOnly) return;
-    if (undoCommand(view)) view.focus();
+    if (undoCommand(view)) {
+      const depth = undoDepth(view.state);
+      setCanUndo(depth > 0);
+      canUndoRef.current = depth > 0;
+      view.focus();
+    }
   }
 
   function selectionText() {
@@ -358,7 +383,7 @@ export function CodeEditor({
               aria-label="撤销上一步"
               size="small"
               icon={<UndoOutlined />}
-              disabled={readOnly}
+              disabled={readOnly || !canUndo}
               onClick={undoLastEdit}
             />
           </Tooltip>

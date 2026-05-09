@@ -3,29 +3,48 @@ use super::*;
 impl RemoteRuntime {
     pub async fn open_sftp(&self, connection_id: &str) -> AppResult<SftpInfo> {
         let connection = self.connection(connection_id).await?;
+        // Open only 1 SFTP channel immediately for fast startup
         let sftp = Arc::new(open_sftp_channel(&connection).await?);
-        let mut transfer_sessions = vec![sftp.clone()];
-        for _ in 1..SFTP_TRANSFER_POOL_SIZE {
-            match open_sftp_channel(&connection).await {
-                Ok(session) => transfer_sessions.push(Arc::new(session)),
-                Err(_) => break,
-            }
-        }
         let info = SftpInfo {
             sftp_id: Uuid::new_v4().to_string(),
             connection_id: connection_id.to_string(),
             opened_at: now(),
         };
-        self.sftp_sessions.write().await.insert(
-            info.sftp_id.clone(),
-            SftpRecord {
-                info: info.clone(),
-                session: sftp,
-                transfer_sessions,
-                transfer_cursor: Arc::new(Mutex::new(0)),
-                transfer_slots: Arc::new(Semaphore::new(MAX_SFTP_TRANSFER_CONCURRENCY)),
-            },
-        );
+        if let Some(label) = crate::errors::resource_label(connection_id) {
+            crate::errors::register_resource_label(&info.sftp_id, &label);
+        }
+        let transfer_sessions = Arc::new(RwLock::new(vec![sftp.clone()]));
+        let pool_ready = Arc::new(AtomicBool::new(false));
+        let record = SftpRecord {
+            info: info.clone(),
+            connection_id: connection_id.to_string(),
+            session: sftp,
+            transfer_sessions: transfer_sessions.clone(),
+            transfer_cursor: Arc::new(Mutex::new(0)),
+            transfer_slots: Arc::new(Semaphore::new(MAX_SFTP_TRANSFER_CONCURRENCY)),
+            pool_ready: pool_ready.clone(),
+        };
+        self.sftp_sessions.write().await.insert(info.sftp_id.clone(), record);
+
+        // Expand the transfer pool in the background (non-blocking)
+        let conn = connection.clone();
+        let pool = transfer_sessions;
+        let ready = pool_ready;
+        tokio::spawn(async move {
+            let extra_count = SFTP_TRANSFER_POOL_SIZE - 1;
+            let mut futures = Vec::with_capacity(extra_count);
+            for _ in 0..extra_count {
+                let c = conn.clone();
+                futures.push(tokio::spawn(async move { open_sftp_channel(&c).await }));
+            }
+            for future in futures {
+                if let Ok(Ok(session)) = future.await {
+                    pool.write().await.push(Arc::new(session));
+                }
+            }
+            ready.store(true, Ordering::Relaxed);
+        });
+
         Ok(info)
     }
 
