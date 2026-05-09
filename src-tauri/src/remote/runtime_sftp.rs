@@ -14,22 +14,18 @@ impl RemoteRuntime {
             crate::errors::register_resource_label(&info.sftp_id, &label);
         }
         let transfer_sessions = Arc::new(RwLock::new(vec![sftp.clone()]));
-        let pool_ready = Arc::new(AtomicBool::new(false));
         let record = SftpRecord {
             info: info.clone(),
-            connection_id: connection_id.to_string(),
             session: sftp,
             transfer_sessions: transfer_sessions.clone(),
             transfer_cursor: Arc::new(Mutex::new(0)),
             transfer_slots: Arc::new(Semaphore::new(MAX_SFTP_TRANSFER_CONCURRENCY)),
-            pool_ready: pool_ready.clone(),
         };
         self.sftp_sessions.write().await.insert(info.sftp_id.clone(), record);
 
         // Expand the transfer pool in the background (non-blocking)
         let conn = connection.clone();
         let pool = transfer_sessions;
-        let ready = pool_ready;
         tokio::spawn(async move {
             let extra_count = SFTP_TRANSFER_POOL_SIZE - 1;
             let mut futures = Vec::with_capacity(extra_count);
@@ -42,7 +38,6 @@ impl RemoteRuntime {
                     pool.write().await.push(Arc::new(session));
                 }
             }
-            ready.store(true, Ordering::Relaxed);
         });
 
         Ok(info)

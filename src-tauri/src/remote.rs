@@ -378,12 +378,10 @@ struct TerminalRecord {
 #[derive(Clone)]
 struct SftpRecord {
     info: SftpInfo,
-    connection_id: String,
     session: Arc<SftpSession>,
     transfer_sessions: Arc<RwLock<Vec<Arc<SftpSession>>>>,
     transfer_cursor: Arc<Mutex<usize>>,
     transfer_slots: Arc<Semaphore>,
-    pool_ready: Arc<AtomicBool>,
 }
 
 impl SftpRecord {
