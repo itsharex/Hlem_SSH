@@ -336,10 +336,37 @@ export interface TerminalOutputEvent {
   terminalId: string;
   kind: "system" | "output" | "error";
   data: string;
+  dataBase64?: string;
 }
 
 export interface TerminalClosedEvent {
   terminalId: string;
+}
+
+export interface AppInfo {
+  version: string;
+  os: string;
+  arch: string;
+  databasePath: string;
+}
+
+export interface UpdateAsset {
+  name: string;
+  downloadUrl: string;
+  size: number;
+  sha256?: string;
+}
+
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  tagName: string;
+  htmlUrl: string;
+  body: string;
+  publishedAt: string;
+  asset: UpdateAsset | null;
+  hasUpdate: boolean;
+  signatureVerified?: boolean;
 }
 
 export interface TelemetrySnapshotEvent {

@@ -6,8 +6,9 @@ import { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { remoteApi } from "../api/remoteApi";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
-import type { RemoteSession, TerminalEntry } from "../types";
+import type { RemoteSession, TerminalEntry, TerminalOutputEvent } from "../types";
 
 interface TerminalPanelProps {
   session: RemoteSession;
@@ -217,15 +218,37 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     }
 
     for (const entry of session.terminal) {
+      if (entry.kind === "output") continue;
       const content = terminalEntryData(entry);
       const previousLength = applied.offsets.get(entry.id) ?? 0;
       if (previousLength < content.length) {
         const nextContent = content.slice(previousLength);
-        terminal.write(entry.kind === "output" ? colorTerminalResponse(colorPendingInputEcho(nextContent)) : nextContent);
+        terminal.write(nextContent);
         applied.offsets.set(entry.id, content.length);
       }
     }
   }, [session.id, session.terminalId, session.terminal]);
+
+  useEffect(() => {
+    const terminalId = session.terminalId;
+    if (!terminalId) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void remoteApi.onTerminalOutput((payload) => {
+      if (disposed || payload.terminalId !== terminalId) return;
+      writeLiveTerminalPayload(payload);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      cleanup = unlisten;
+    });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [session.terminalId]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -366,38 +389,6 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
       submitInput();
       return;
     }
-    if (event.key === "ArrowUp") {
-      const history = inputHistoryRef.current;
-      if (history.length === 0) return;
-      event.preventDefault();
-      const cursor = historyCursorRef.current;
-      if (cursor === null) historyDraftRef.current = event.currentTarget.value;
-      const next = cursor === null ? history.length - 1 : Math.max(cursor - 1, 0);
-      historyCursorRef.current = next;
-      const command = history[next]?.command ?? "";
-      setInputText(command);
-      mirrorToShell(command);
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      const cursor = historyCursorRef.current;
-      if (cursor === null) return;
-      event.preventDefault();
-      const next = cursor + 1;
-      if (next >= inputHistoryRef.current.length) {
-        historyCursorRef.current = null;
-        const draft = historyDraftRef.current;
-        setInputText(draft);
-        mirrorToShell(draft);
-        historyDraftRef.current = "";
-      } else {
-        historyCursorRef.current = next;
-        const command = inputHistoryRef.current[next]?.command ?? "";
-        setInputText(command);
-        mirrorToShell(command);
-      }
-      return;
-    }
     if (event.key === "Escape") {
       event.preventDefault();
       setInputValue("");
@@ -429,6 +420,26 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     historyDraftRef.current = "";
     setHistoryOpen(false);
     window.requestAnimationFrame(() => terminalRef.current?.focus());
+  }
+
+  function writeLiveTerminalPayload(payload: TerminalOutputEvent) {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (payload.kind === "system") {
+      terminal.write(`\r\n\x1b[2m${new Date().toLocaleTimeString("zh-CN", { hour12: false })}\x1b[0m \x1b[36m${payload.data}\x1b[0m\r\n`);
+      return;
+    }
+    terminal.write(terminalPayloadBytes(payload));
+  }
+
+  function terminalPayloadBytes(payload: TerminalOutputEvent) {
+    if (!payload.dataBase64) return payload.data;
+    const binary = window.atob(payload.dataBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
   }
 
   function trackInputEcho(data: string) {

@@ -15,3 +15,5 @@ __pycache__
 *.orig
 1.txt
 /.claude
+helm_update_private.pem
+helm_update_public.pem

@@ -1,5 +1,5 @@
 import { remoteApi } from "../api/remoteApi";
-import { getErrorMessage, initialRemotePath } from "../lib/configMapping";
+import { defaultRemoteHomePath, getErrorMessage, initialRemotePath } from "../lib/configMapping";
 import {
   getBaseName as getRemoteBaseName,
   joinPath as joinRemotePath,
@@ -14,9 +14,6 @@ import type {
   SessionInput,
   TerminalEntry,
 } from "../types";
-
-export const CWD_TRACKING_COMMAND =
-  "export HELM_CWD_HOOK=1; __helm_emit_cwd(){ printf \"\\033]777;cwd=%s\\007\" \"$PWD\"; }; cd(){ builtin cd \"$@\" && __helm_emit_cwd; }; export PROMPT_COMMAND='__helm_emit_cwd'; __helm_emit_cwd\n";
 
 const CWD_TRACKING_ECHO_FRAGMENTS = [
   "HELM_CWD_HOOK=1",
@@ -132,6 +129,45 @@ export function stripCwdMarkers(data: string) {
     .filter((chunk) => !CWD_TRACKING_ECHO_FRAGMENTS.every((fragment) => chunk.includes(fragment)))
     .join("");
   return { data: withoutCommandEcho, cwd, markerSeen };
+}
+
+export function extractPromptCwd(data: string, username: string) {
+  const cleaned = stripTerminalControls(data).replace(/\r/g, "\n");
+  const lines = cleaned
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-8)
+    .reverse();
+  for (const line of lines) {
+    const cwd = extractPromptCwdFromLine(line);
+    if (!cwd) continue;
+    const path = resolvePromptCwd(cwd, username);
+    if (path) return path;
+  }
+  return null;
+}
+
+function extractPromptCwdFromLine(line: string) {
+  const plainPrompt = line.match(/(?:^|\s)[\w.-]+@[\w.-]+:(.+?)(?:[$#>])\s*$/);
+  if (plainPrompt?.[1]) return plainPrompt[1].trim();
+  const bracketPrompt = line.match(/(?:^|\s)\[[^\]\s]+@[\w.-]+\s+(.+?)\](?:[$#>])\s*$/);
+  if (bracketPrompt?.[1]) return bracketPrompt[1].trim();
+  return null;
+}
+
+function resolvePromptCwd(cwd: string, username: string) {
+  if (cwd === "~") return defaultRemoteHomePath(username);
+  if (cwd.startsWith("~/")) return `${defaultRemoteHomePath(username)}${cwd.slice(1)}`;
+  if (cwd.startsWith("/")) return cwd;
+  return null;
+}
+
+function stripTerminalControls(value: string) {
+  return value
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
 export function remoteSessionPath(session: Pick<RemoteSession, "username" | "currentPath">) {

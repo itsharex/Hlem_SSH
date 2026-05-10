@@ -1,0 +1,298 @@
+name: Windows Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 0.1.25. Empty means auto."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Compute release version
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute release version
+        id: version
+        shell: pwsh
+        run: |
+          $manual = "${{ inputs.version }}".Trim()
+          $base = (node -p "require('./package.json').version").Trim()
+          if ($manual) {
+            $version = $manual
+          } else {
+            $parts = $base.Split('.')
+            if ($parts.Length -lt 2) {
+              throw "package.json version must be semver-like, got '$base'"
+            }
+            $version = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.+][0-9A-Za-z.-]+)?$') {
+            throw "Invalid version '$version'"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
+
+  build:
+    name: Build ${{ matrix.label }} exe
+    runs-on: windows-latest
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: win-x64
+            rust_target: x86_64-pc-windows-msvc
+          - label: win-x86
+            rust_target: i686-pc-windows-msvc
+          - label: win-arm64
+            rust_target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> ../target
+          key: ${{ matrix.rust_target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Apply release version
+        shell: pwsh
+        env:
+          HELM_RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $version = $env:HELM_RELEASE_VERSION
+          node -e "const fs=require('fs'); for (const file of ['package.json','package-lock.json']) { const p=JSON.parse(fs.readFileSync(file,'utf8')); p.version=process.env.HELM_RELEASE_VERSION; if (p.packages && p.packages['']) p.packages[''].version=process.env.HELM_RELEASE_VERSION; fs.writeFileSync(file, JSON.stringify(p,null,2)+'\n'); }"
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $cargo = $cargo -replace '(?m)^version = ".+"', "version = `"$version`""
+          Set-Content src-tauri/Cargo.toml $cargo -NoNewline
+          $tauri = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $tauri.version = $version
+          $tauri | ConvertTo-Json -Depth 100 | Set-Content src-tauri/tauri.conf.json
+
+      - name: Build Windows exe with LTO
+        shell: pwsh
+        env:
+          VITE_HELM_UPDATE_REPO: ${{ github.repository }}
+          VITE_HELM_UPDATE_PUBLIC_KEY_PEM: ${{ vars.HELM_UPDATE_PUBLIC_KEY_PEM }}
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: npm run tauri -- build --target ${{ matrix.rust_target }} --bundles nsis
+
+      - name: Collect exe installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $roots = @(
+            "target/${{ matrix.rust_target }}/release/bundle",
+            "src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          )
+          $files = Get-ChildItem -Path $roots -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -ieq ".exe" }
+          if (-not $files) {
+            throw "No Windows exe installer artifacts were found for ${{ matrix.rust_target }}."
+          }
+          foreach ($file in $files) {
+            $name = "{0}-${{ matrix.label }}{1}" -f $file.BaseName, $file.Extension
+            Copy-Item $file.FullName -Destination (Join-Path release-assets $name)
+          }
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-${{ matrix.label }}-exe
+          path: release-assets/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    runs-on: windows-latest
+    needs:
+      - version
+      - build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exe artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: helm-*-exe
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256 sums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release-assets -File -Filter *.exe
+          if (-not $files) {
+            throw "No exe artifacts were downloaded."
+          }
+          $files | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content release-assets/SHA256SUMS.txt
+
+      - name: Generate signed update manifest
+        shell: pwsh
+        env:
+          HELM_RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          HELM_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.HELM_UPDATE_PRIVATE_KEY_PEM }}
+        run: |
+          if (-not $env:HELM_UPDATE_PRIVATE_KEY_PEM) {
+            throw "Missing GitHub secret HELM_UPDATE_PRIVATE_KEY_PEM."
+          }
+          @'
+          const crypto = require("crypto");
+          const fs = require("fs");
+          const path = require("path");
+
+          function archFromName(name) {
+            const lower = name.toLowerCase();
+            if (lower.includes("win-arm64") || lower.includes("aarch64")) return "arm64";
+            if (lower.includes("win-x86") || lower.includes("i686")) return "x86";
+            return "x64";
+          }
+
+          const releaseDir = "release-assets";
+          const tag = process.env.HELM_RELEASE_TAG;
+          const repo = process.env.GITHUB_REPOSITORY;
+          const exeFiles = fs.readdirSync(releaseDir)
+            .filter((name) => name.toLowerCase().endsWith(".exe"))
+            .sort();
+          if (!exeFiles.length) throw new Error("No exe assets found for update manifest.");
+
+          const assets = exeFiles.map((name) => {
+            const filePath = path.join(releaseDir, name);
+            const bytes = fs.readFileSync(filePath);
+            return {
+              platform: "windows",
+              arch: archFromName(name),
+              name,
+              url: `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`,
+              size: bytes.length,
+              sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+            };
+          });
+
+          const manifest = {
+            version: 1,
+            appVersion: process.env.HELM_RELEASE_VERSION,
+            tagName: tag,
+            htmlUrl: `https://github.com/${repo}/releases/tag/${tag}`,
+            publishedAt: new Date().toISOString(),
+            assets,
+          };
+          const payload = `${JSON.stringify(manifest, null, 2)}\n`;
+          fs.writeFileSync(path.join(releaseDir, "latest.json"), payload, "utf8");
+
+          const privateKey = process.env.HELM_UPDATE_PRIVATE_KEY_PEM.replace(/\\n/g, "\n");
+          const signature = crypto.sign("sha256", Buffer.from(payload, "utf8"), {
+            key: privateKey,
+            padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+            saltLength: 32,
+          });
+          fs.writeFileSync(path.join(releaseDir, "latest.json.sig"), `${signature.toString("base64")}\n`, "utf8");
+          '@ | Set-Content sign-update.cjs
+          node sign-update.cjs
+
+      - name: Generate release notes
+        shell: pwsh
+        env:
+          HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          $previous = git describe --tags --abbrev=0 2>$null
+          if ($LASTEXITCODE -eq 0 -and $previous) {
+            $range = "$previous..HEAD"
+          } else {
+            $range = "HEAD"
+          }
+          $commits = git log $range --pretty=format:"- %s (%h)"
+          if (-not $commits) {
+            $commits = "- Initial automated Windows release."
+          }
+          @"
+          ## HelM $env:HELM_RELEASE_TAG
+
+          Windows x64, x86 and ARM64 exe installers built automatically with Rust release LTO.
+
+          ## 更新内容
+
+          $commits
+
+          ## 校验
+
+          See `SHA256SUMS.txt` in the release assets.
+          "@ | Set-Content RELEASE_NOTES.md
+
+      - name: Create and push tag
+        shell: pwsh
+        env:
+          HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags
+          $exists = git tag --list "$env:HELM_RELEASE_TAG"
+          if (-not $exists) {
+            git tag -a "$env:HELM_RELEASE_TAG" -m "Release $env:HELM_RELEASE_TAG"
+            git push origin "$env:HELM_RELEASE_TAG"
+          } else {
+            Write-Host "Tag $env:HELM_RELEASE_TAG already exists, reusing it."
+          }
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: HelM ${{ needs.version.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: release-assets/*

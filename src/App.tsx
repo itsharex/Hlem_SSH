@@ -1,5 +1,6 @@
 import { Modal } from "antd";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { appApi } from "./api/appApi";
 import { appEvents } from "./api/appEvents";
 import { remoteApi } from "./api/remoteApi";
 import { defaultBackupSettings, vaultApi } from "./api/vaultApi";
@@ -17,9 +18,9 @@ import {
 } from "./app/lazyComponents";
 import type { SessionModalState, VaultMode } from "./app/appTypes";
 import {
-  CWD_TRACKING_COMMAND,
   appendTerminalStreamEntries,
   createNextSessionName,
+  extractPromptCwd,
   getHostKeyPayload,
   hasTelemetryData,
   remoteSessionPath,
@@ -48,6 +49,7 @@ import { createTerminalEntry } from "./lib/session";
 import type {
   ConfigSnapshot,
   AppSettings,
+  AppInfo,
   FileSaveRecord,
   ForwardInfo,
   ForwardStatusEvent,
@@ -60,6 +62,7 @@ import type {
   TunnelConfig,
   TunnelInput,
   TransferInfo,
+  UpdateInfo,
 } from "./types";
 
 type TransferHistorySnapshot = {
@@ -94,8 +97,13 @@ function App() {
   const [backupBusy, setBackupBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tunnelOpen, setTunnelOpen] = useState(false);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [downloadedUpdatePath, setDownloadedUpdatePath] = useState<string | null>(null);
   const [fileLoadingSessionIds, setFileLoadingSessionIds] = useState<Set<string>>(new Set());
-  const [cwdTrackingTerminalIds, setCwdTrackingTerminalIds] = useState<Set<string>>(new Set());
   const sessionsRef = useRef<RemoteSession[]>([]);
   const transfersRef = useRef<TransferInfo[]>([]);
   const transferSessionIdsRef = useRef<Record<string, string>>({});
@@ -104,11 +112,11 @@ function App() {
   const pendingTerminalEntriesRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputBuffersRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputFlushRef = useRef<number | null>(null);
-  const cwdTrackingAwaitingMarkerRef = useRef<Set<string>>(new Set());
   const vaultModeRef = useRef(vaultMode);
   const configSnapshotRef = useRef<ConfigSnapshot | undefined>(configSnapshot);
   const autoBackupRunningRef = useRef(false);
   const inputHistorySaveTimerRef = useRef<number | null>(null);
+  const autoUpdatePromptedRef = useRef(false);
   const pendingConnectionIdsRef = useRef<Map<string, string>>(new Map());
   const abortedConnectSessionsRef = useRef<Set<string>>(new Set());
   const openSessions = useMemo(
@@ -122,6 +130,7 @@ function App() {
 
   useEffect(() => {
     initializeVault();
+    void initializeAppInfoAndUpdate();
     return () => {
       if (transferHistoryPersistTimerRef.current !== null) {
         window.clearTimeout(transferHistoryPersistTimerRef.current);
@@ -260,6 +269,82 @@ function App() {
     }
   }
 
+  async function initializeAppInfoAndUpdate() {
+    try {
+      const info = await appApi.info();
+      setAppInfo(info);
+      await checkForUpdate(false, info);
+    } catch {
+      // 版本信息和更新检查失败不影响主流程。
+    }
+  }
+
+  async function checkForUpdate(manual = true, knownInfo = appInfo) {
+    const info = knownInfo ?? (await appApi.info());
+    setAppInfo(info);
+    if (!appApi.updateRepo()) {
+      if (manual) Modal.warning({ title: "未配置更新源", content: "发布版会由 GitHub Actions 自动写入更新仓库地址。" });
+      return;
+    }
+    setUpdateChecking(true);
+    setUpdateError(null);
+    try {
+      const next = await appApi.checkUpdate(info.version, info.arch);
+      setUpdateInfo(next);
+      if (!next) return;
+      if (next.hasUpdate) {
+        if (!manual && autoUpdatePromptedRef.current) return;
+        autoUpdatePromptedRef.current = true;
+        Modal.confirm({
+          title: `发现新版本 ${next.tagName}`,
+          content: next.asset ? `当前版本 ${info.version}，是否下载 ${next.asset.name}？` : "当前 Release 没有找到 Windows 安装包。",
+          okText: "下载更新",
+          cancelText: "稍后",
+          okButtonProps: { disabled: !next.asset },
+          onOk: () => downloadUpdate(next),
+        });
+      } else if (manual) {
+        Modal.info({ title: "当前已是最新版本", content: `当前版本：${info.version}` });
+      }
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setUpdateError(message);
+      if (manual) Modal.error({ title: "检查更新失败", content: message });
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function downloadUpdate(target = updateInfo) {
+    if (!target?.asset) return;
+    setUpdateDownloading(true);
+    try {
+      const path = await appApi.downloadSignedUpdate(target.asset.downloadUrl, target.asset.name, target.asset.sha256);
+      setDownloadedUpdatePath(path);
+      Modal.success({ title: "更新包已下载", content: path });
+    } catch (error) {
+      Modal.error({ title: "下载更新失败", content: getErrorMessage(error) });
+    } finally {
+      setUpdateDownloading(false);
+    }
+  }
+
+  async function openDatabaseDir() {
+    try {
+      await appApi.openDatabaseDir();
+    } catch (error) {
+      Modal.error({ title: "打开数据库目录失败", content: getErrorMessage(error) });
+    }
+  }
+
+  async function openExternalUrl(url: string) {
+    try {
+      await appApi.openExternalUrl(url);
+    } catch (error) {
+      Modal.error({ title: "打开链接失败", content: getErrorMessage(error) });
+    }
+  }
+
   async function createVault(masterPassword: string) {
     await runVaultAction(async () => {
       applySnapshot(await vaultApi.create(masterPassword));
@@ -296,10 +381,8 @@ function App() {
     setSettingsOpen(false);
     setTunnelOpen(false);
     setFileLoadingSessionIds(new Set());
-    setCwdTrackingTerminalIds(new Set());
     terminalSessionMapRef.current.clear();
     pendingTerminalEntriesRef.current.clear();
-    cwdTrackingAwaitingMarkerRef.current.clear();
     clearTerminalOutputBuffers();
     if (inputHistorySaveTimerRef.current !== null) {
       window.clearTimeout(inputHistorySaveTimerRef.current);
@@ -423,7 +506,6 @@ function App() {
     if (!session.connectionId) return;
     try {
       await remoteApi.disconnect(session.connectionId);
-      removeCwdTrackingTerminalId(session.terminalId);
       updateSession(session.id, (item) => ({
         ...item,
         state: "disconnected",
@@ -701,20 +783,15 @@ function App() {
   }
 
   function handleTerminalOutput(payload: TerminalOutputEvent) {
-    const awaitingCwdMarker = cwdTrackingAwaitingMarkerRef.current.has(payload.terminalId);
-    const { data, cwd, markerSeen } = stripCwdMarkers(payload.data);
-    if (markerSeen) {
-      cwdTrackingAwaitingMarkerRef.current.delete(payload.terminalId);
-    }
-    if (cwd) updateTerminalCwd(payload.terminalId, cwd);
-    const visibleData = awaitingCwdMarker && markerSeen ? stripCwdSetupPrompt(data) : data;
-    const entry = createTerminalEntry(payload.kind, visibleData);
-    if (!entry.content) return;
-    enqueueTerminalOutput(payload.terminalId, entry);
+    const { data, cwd } = stripCwdMarkers(payload.data);
+    const promptCwd = extractTerminalPromptCwd(payload.terminalId, data);
+    if (cwd || promptCwd) updateTerminalCwd(payload.terminalId, cwd ?? promptCwd ?? "");
   }
 
-  function stripCwdSetupPrompt(data: string) {
-    return data.replace(/(?:\r?\n)?[^\r\n]{0,200}(?:[$#>]\s?)$/, "");
+  function extractTerminalPromptCwd(terminalId: string, data: string) {
+    const session = sessionsRef.current.find((item) => item.terminalId === terminalId);
+    if (!session) return null;
+    return extractPromptCwd(data, session.username);
   }
 
   function enqueueTerminalOutput(terminalId: string, entry: TerminalEntry) {
@@ -772,21 +849,9 @@ function App() {
     terminalOutputBuffersRef.current.clear();
   }
 
-  function removeCwdTrackingTerminalId(terminalId: string | null | undefined) {
-    if (!terminalId) return;
-    cwdTrackingAwaitingMarkerRef.current.delete(terminalId);
-    setCwdTrackingTerminalIds((current) => {
-      if (!current.has(terminalId)) return current;
-      const next = new Set(current);
-      next.delete(terminalId);
-      return next;
-    });
-  }
-
   function handleTerminalClosed(payload: TerminalClosedEvent) {
     terminalSessionMapRef.current.delete(payload.terminalId);
     pendingTerminalEntriesRef.current.delete(payload.terminalId);
-    removeCwdTrackingTerminalId(payload.terminalId);
     setSessions((current) =>
       current.map((session) =>
         session.terminalId === payload.terminalId
@@ -801,13 +866,6 @@ function App() {
           : session,
       ),
     );
-  }
-
-  function installCwdTracking(terminalId: string) {
-    if (cwdTrackingTerminalIds.has(terminalId)) return;
-    cwdTrackingAwaitingMarkerRef.current.add(terminalId);
-    setCwdTrackingTerminalIds((current) => new Set(current).add(terminalId));
-    void remoteApi.writeTerminal(terminalId, CWD_TRACKING_COMMAND).catch(() => removeCwdTrackingTerminalId(terminalId));
   }
 
   function updateTerminalCwd(terminalId: string, cwd: string) {
@@ -865,7 +923,6 @@ function App() {
       const terminal = terminalResult.value;
       if (terminal) {
         terminalSessionMapRef.current.set(terminal.terminalId, session.id);
-        installCwdTracking(terminal.terminalId);
         const pendingTerminalEntries = pendingTerminalEntriesRef.current.get(terminal.terminalId);
         if (pendingTerminalEntries?.length) {
           pendingTerminalEntriesRef.current.delete(terminal.terminalId);
@@ -1238,8 +1295,6 @@ function App() {
       terminalSessionMapRef.current.clear();
       pendingTerminalEntriesRef.current.clear();
       clearTerminalOutputBuffers();
-      cwdTrackingAwaitingMarkerRef.current.clear();
-      setCwdTrackingTerminalIds(new Set());
       setTransfers([]);
       setForwards([]);
       setFileLoadingSessionIds(new Set());
@@ -1471,6 +1526,17 @@ function App() {
               onSubmit={saveSettings}
               onBackupOpen={() => setBackupOpen(true)}
               onTunnelOpen={() => setTunnelOpen(true)}
+              appInfo={appInfo}
+              updateInfo={updateInfo}
+              updateError={updateError}
+              updateChecking={updateChecking}
+              updateDownloading={updateDownloading}
+              downloadedUpdatePath={downloadedUpdatePath}
+              updateRepo={appApi.updateRepo()}
+              onCheckUpdate={checkForUpdate}
+              onDownloadUpdate={downloadUpdate}
+              onOpenDatabaseDir={openDatabaseDir}
+              onOpenExternalUrl={openExternalUrl}
             />
             <TunnelDrawer
               open={tunnelOpen}

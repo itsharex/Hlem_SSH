@@ -192,6 +192,393 @@
   transform: translateY(0);
 }
 
+.aboutInfoList {
+  display: none;
+}
+
+/* ─── About Modal 全新设计 ──────────────────────────────────────────────── */
+.aboutVersionModal .ant-modal-content {
+  border: none !important;
+  border-radius: 24px !important;
+  background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%) !important;
+  box-shadow:
+    0 40px 80px -20px rgba(15, 23, 42, .28),
+    0 16px 32px -12px rgba(99, 102, 241, .2),
+    0 0 0 1px rgba(99, 102, 241, .08) !important;
+  overflow: hidden;
+  padding: 0 !important;
+}
+
+.aboutVersionModal .ant-modal-content::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 200px;
+  background: radial-gradient(600px 300px at 50% -40%, rgba(99, 102, 241, .12) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.aboutVersionModal .ant-modal-header {
+  display: none !important;
+}
+
+.aboutVersionModal .ant-modal-body {
+  padding: 0 !important;
+  position: relative;
+  z-index: 1;
+}
+
+.aboutVersionModal .ant-modal-close {
+  top: 16px !important;
+  right: 16px !important;
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 50% !important;
+  background: rgba(241, 245, 249, .85) !important;
+  border: 1px solid rgba(226, 232, 240, .6) !important;
+  backdrop-filter: blur(8px);
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+  z-index: 10;
+}
+
+.aboutVersionModal .ant-modal-close:hover {
+  background: rgba(239, 68, 68, .08) !important;
+  border-color: rgba(239, 68, 68, .3) !important;
+  color: var(--danger) !important;
+  transform: rotate(90deg) scale(1.05);
+}
+
+.aboutVersionModal .ant-modal-footer {
+  display: none !important;
+}
+
+/* Hero 区域 */
+.aboutHero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 32px 16px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.aboutHeroGlow {
+  position: absolute;
+  top: -60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+  height: 200px;
+  background: radial-gradient(ellipse, rgba(99, 102, 241, .15) 0%, rgba(139, 92, 246, .08) 40%, transparent 70%);
+  pointer-events: none;
+  animation: aboutGlowPulse 4s ease-in-out infinite;
+}
+
+@keyframes aboutGlowPulse {
+  0%, 100% { opacity: .7; transform: translateX(-50%) scale(1); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1.1); }
+}
+
+.aboutHeroIcon {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  transition: transform .3s cubic-bezier(.4, 0, .2, 1);
+}
+
+.aboutHeroIcon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 12px rgba(99, 102, 241, .2));
+}
+
+.aboutHeroIcon:hover {
+  transform: translateY(-2px) scale(1.06);
+}
+
+.aboutHeroTitle {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -.5px;
+  background: linear-gradient(135deg, #1e293b 0%, #4f46e5 60%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.aboutHeroVersion {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  border: 1px solid rgba(99, 102, 241, .15);
+  font-size: 12px;
+  font-weight: 700;
+  color: #6366f1;
+  margin-bottom: 6px;
+}
+
+.aboutHeroVersion .aboutVersionLink {
+  color: #6366f1 !important;
+  font-weight: 700;
+}
+
+.aboutHeroVersion .aboutVersionLink:hover {
+  color: #4f46e5 !important;
+}
+
+.aboutHeroTagline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* 状态横幅 */
+.aboutStatusBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  transition: all .2s ease;
+}
+
+.aboutStatusBanner--success {
+  background: linear-gradient(135deg, rgba(16, 185, 129, .08) 0%, rgba(6, 214, 160, .06) 100%);
+  border: 1px solid rgba(16, 185, 129, .2);
+}
+
+.aboutStatusBanner--success .aboutStatusIcon {
+  color: #10b981;
+  font-size: 18px;
+}
+
+.aboutStatusBanner--info {
+  background: linear-gradient(135deg, rgba(59, 130, 246, .08) 0%, rgba(99, 102, 241, .06) 100%);
+  border: 1px solid rgba(59, 130, 246, .2);
+}
+
+.aboutStatusBanner--info .aboutStatusIcon {
+  color: #3b82f6;
+  font-size: 18px;
+}
+
+.aboutStatusBanner--warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, .08) 0%, rgba(251, 146, 60, .06) 100%);
+  border: 1px solid rgba(245, 158, 11, .2);
+}
+
+.aboutStatusBanner--warning .aboutStatusIcon {
+  color: #f59e0b;
+  font-size: 18px;
+}
+
+.aboutStatusText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aboutStatusText strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.aboutStatusText span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 信息卡片 */
+.aboutInfoCards {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 14px 24px 6px;
+  overflow: hidden;
+}
+
+.aboutInfoCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, .7);
+  transition: all .2s cubic-bezier(.4, 0, .2, 1);
+}
+
+.aboutInfoCard:hover {
+  border-color: rgba(99, 102, 241, .25);
+  background: linear-gradient(135deg, #fafbff 0%, #f8f7ff 100%);
+  box-shadow: 0 4px 12px -4px rgba(99, 102, 241, .1);
+  transform: translateX(2px);
+}
+
+.aboutInfoCardIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f1f5f9 0%, #eef2ff 100%);
+  font-size: 16px;
+  flex: 0 0 32px;
+}
+
+.aboutInfoCardContent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.aboutInfoCardLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.aboutInfoCardValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aboutInfoCardValue--path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.aboutInfoCardValue--path .ant-typography {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+}
+
+.aboutInfoCardValue a.ant-typography,
+.aboutInfoCardValue span.ant-typography {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.aboutInfoCardValue .ant-typography-ellipsis {
+  max-width: 100%;
+}
+
+.aboutInfoCardMeta {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.aboutPathBtn {
+  flex: 0 0 auto;
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 8px !important;
+  color: var(--accent) !important;
+  transition: all .2s ease !important;
+}
+
+.aboutPathBtn:hover {
+  background: rgba(99, 102, 241, .1) !important;
+  transform: scale(1.1);
+}
+
+/* 操作按钮区域 */
+.aboutActions {
+  padding: 14px 24px 22px;
+}
+
+.aboutUpdateBtn.ant-btn {
+  height: 40px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  transition: all .25s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.aboutUpdateBtn.ant-btn-default {
+  border: 1px solid rgba(99, 102, 241, .25) !important;
+  background: linear-gradient(135deg, #f8faff 0%, #f0edff 100%) !important;
+  color: #6366f1 !important;
+  box-shadow: 0 2px 8px -2px rgba(99, 102, 241, .15) !important;
+}
+
+.aboutUpdateBtn.ant-btn-default .ant-btn-icon {
+  color: #6366f1 !important;
+}
+
+.aboutUpdateBtn.ant-btn-default:not(:disabled):hover {
+  border-color: rgba(99, 102, 241, .5) !important;
+  background: linear-gradient(135deg, #eef2ff 0%, #ede9fe 100%) !important;
+  color: #4f46e5 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -6px rgba(99, 102, 241, .3) !important;
+}
+
+.aboutUpdateBtn.ant-btn-default:not(:disabled):active {
+  transform: translateY(0) !important;
+  box-shadow: 0 2px 6px -2px rgba(99, 102, 241, .2) !important;
+}
+
+.aboutUpdateBtn.ant-btn-primary {
+  border: 0 !important;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 20px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.aboutUpdateBtn.ant-btn-primary:not(:disabled):hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 12px 28px -6px rgba(99, 102, 241, .6) !important;
+}
+
+.aboutUpdateBtn.ant-btn:active {
+  transform: translateY(0) !important;
+}
+
 .settingsProxyHeader {
   display: flex;
   align-items: center;

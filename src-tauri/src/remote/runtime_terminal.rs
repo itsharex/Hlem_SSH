@@ -61,6 +61,7 @@ impl RemoteRuntime {
                                 terminal_id: closed_terminal_id.clone(),
                                 kind: "system".to_string(),
                                 data: format!("进程退出，状态码 {exit_status}"),
+                                data_base64: String::new(),
                             },
                         );
                     }

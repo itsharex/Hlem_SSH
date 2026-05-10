@@ -1,4 +1,5 @@
 use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 
 pub(super) fn map_connect_error(
@@ -28,6 +29,7 @@ pub(super) fn emit_terminal_output(app: &AppHandle, terminal_id: &str, kind: &st
             terminal_id: terminal_id.to_string(),
             kind: kind.to_string(),
             data: String::from_utf8_lossy(data).to_string(),
+            data_base64: STANDARD.encode(data),
         },
     );
 }
@@ -57,6 +59,7 @@ pub(super) struct TerminalOutputPayload {
     pub(super) terminal_id: String,
     pub(super) kind: String,
     pub(super) data: String,
+    pub(super) data_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
