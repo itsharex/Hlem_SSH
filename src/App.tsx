@@ -116,7 +116,7 @@ function App() {
   const configSnapshotRef = useRef<ConfigSnapshot | undefined>(configSnapshot);
   const autoBackupRunningRef = useRef(false);
   const inputHistorySaveTimerRef = useRef<number | null>(null);
-  const autoUpdatePromptedRef = useRef(false);
+  const autoUpdateTimerRef = useRef<number | null>(null);
   const pendingConnectionIdsRef = useRef<Map<string, string>>(new Map());
   const abortedConnectSessionsRef = useRef<Set<string>>(new Set());
   const openSessions = useMemo(
@@ -131,11 +131,10 @@ function App() {
   useEffect(() => {
     initializeVault();
     void initializeAppInfo();
-    const updateTimer = window.setTimeout(() => {
-      void checkForUpdate(false);
-    }, 1500);
     return () => {
-      window.clearTimeout(updateTimer);
+      if (autoUpdateTimerRef.current !== null) {
+        window.clearTimeout(autoUpdateTimerRef.current);
+      }
       if (transferHistoryPersistTimerRef.current !== null) {
         window.clearTimeout(transferHistoryPersistTimerRef.current);
       }
@@ -277,9 +276,29 @@ function App() {
     try {
       const info = await appApi.info();
       setAppInfo(info);
+      scheduleAutoUpdateCheck(info);
     } catch {
       // 版本信息失败不影响主流程。
     }
+  }
+
+  function scheduleAutoUpdateCheck(info: AppInfo) {
+    if (autoUpdateTimerRef.current !== null) return;
+    autoUpdateTimerRef.current = window.setTimeout(() => {
+      autoUpdateTimerRef.current = null;
+      runWhenBrowserIdle(() => void checkForUpdate(false, info));
+    }, 8000);
+  }
+
+  function runWhenBrowserIdle(task: () => void) {
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    };
+    if (idleWindow.requestIdleCallback) {
+      idleWindow.requestIdleCallback(task, { timeout: 15_000 });
+      return;
+    }
+    window.setTimeout(task, 0);
   }
 
   async function checkForUpdate(manual = true, knownInfo = appInfo) {
@@ -296,8 +315,7 @@ function App() {
       setUpdateInfo(next);
       if (!next) return;
       if (next.hasUpdate) {
-        if (!manual && autoUpdatePromptedRef.current) return;
-        autoUpdatePromptedRef.current = true;
+        if (!manual) return;
         Modal.confirm({
           title: `发现新版本 ${next.tagName}`,
           content: next.asset ? `当前版本 ${info.version}，是否下载 ${next.asset.name}？` : "当前 Release 没有找到 Windows 安装包。",
