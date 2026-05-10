@@ -1,5 +1,11 @@
-use std::{env, path::PathBuf, process::Command, sync::Mutex};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+};
 
+use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
@@ -118,7 +124,11 @@ pub async fn download_update(
         .bytes()
         .await
         .map_err(|error| AppError::Remote(format!("读取更新包失败：{error}")))?;
-    if let Some(expected) = sha256.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(expected) = sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let actual = hex::encode(Sha256::digest(&bytes));
         if !actual.eq_ignore_ascii_case(expected) {
             return Err(AppError::Crypto("更新包 SHA256 校验失败".to_string()));
@@ -141,6 +151,7 @@ pub async fn download_update(
     tokio::fs::write(&target, bytes)
         .await
         .map_err(|error| AppError::Io(error.to_string()))?;
+    launch_update_installer(&app, &target)?;
     Ok(target.display().to_string())
 }
 
@@ -155,9 +166,80 @@ pub fn open_database_dir(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn open_path_dir(path: String) -> AppResult<()> {
+    let target = PathBuf::from(path.trim());
+    let directory = if target.is_dir() {
+        target
+    } else {
+        target
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| AppError::InvalidInput("路径没有上级目录".to_string()))?
+    };
+    open_directory(&directory)
+}
+
+#[tauri::command]
 pub fn open_external_url(url: String) -> AppResult<()> {
     let trimmed = validate_http_url(&url)?;
     open_url(trimmed)
+}
+
+fn launch_update_installer(app: &AppHandle, installer: &Path) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let current_pid = std::process::id();
+        let process_name = env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.file_stem()
+                    .map(|value| value.to_string_lossy().to_string())
+            })
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "HelM".to_string())
+            .replace('\'', "''");
+        let installer_path = installer.display().to_string().replace('\'', "''");
+        let script = format!(
+            r#"
+$installer = '{installer_path}'
+$currentPid = {current_pid}
+$processName = '{process_name}'
+Start-Sleep -Milliseconds 800
+Get-Process -Name $processName -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.Id -ne $PID }} |
+  Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath $installer
+"#
+        );
+        let encoded = general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-EncodedCommand",
+                &encoded,
+            ])
+            .spawn()
+            .map_err(|error| AppError::Io(error.to_string()))?;
+        app.exit(0);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Command::new(installer)
+            .spawn()
+            .map_err(|error| AppError::Io(error.to_string()))?;
+        Ok(())
+    }
 }
 
 fn validate_http_url(value: &str) -> AppResult<&str> {
@@ -260,11 +342,8 @@ fn windows_version_name() -> String {
 fn linux_pretty_name() -> Option<String> {
     let content = std::fs::read_to_string("/etc/os-release").ok()?;
     content.lines().find_map(|line| {
-        line.strip_prefix("PRETTY_NAME=").map(|value| {
-            value
-                .trim_matches('"')
-                .replace("\\\"", "\"")
-        })
+        line.strip_prefix("PRETTY_NAME=")
+            .map(|value| value.trim_matches('"').replace("\\\"", "\""))
     })
 }
 

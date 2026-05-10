@@ -48,6 +48,7 @@ export const appApi = {
   downloadSignedUpdate: (url: string, fileName?: string | null, sha256?: string | null) =>
     call<string>("download_update", () => browserDownload(url), { url, fileName, sha256 }),
   openDatabaseDir: () => call<void>("open_database_dir", () => undefined),
+  openPathDir: (path: string) => call<void>("open_path_dir", () => undefined, { path }),
   openExternalUrl: (url: string) => call<void>("open_external_url", () => browserOpenUrl(url), { url }),
 };
 

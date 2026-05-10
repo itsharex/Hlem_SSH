@@ -341,7 +341,7 @@ function App() {
     try {
       const path = await appApi.downloadSignedUpdate(target.asset.downloadUrl, target.asset.name, target.asset.sha256);
       setDownloadedUpdatePath(path);
-      Modal.success({ title: "更新包已下载", content: path });
+      Modal.success({ title: "更新包已下载", content: "正在启动安装程序，HelM 会自动退出以继续安装。" });
     } catch (error) {
       Modal.error({ title: "下载更新失败", content: getErrorMessage(error) });
     } finally {
@@ -354,6 +354,14 @@ function App() {
       await appApi.openDatabaseDir();
     } catch (error) {
       Modal.error({ title: "打开数据库目录失败", content: getErrorMessage(error) });
+    }
+  }
+
+  async function openPathDir(path: string) {
+    try {
+      await appApi.openPathDir(path);
+    } catch (error) {
+      Modal.error({ title: "打开目录失败", content: getErrorMessage(error) });
     }
   }
 
@@ -1556,6 +1564,7 @@ function App() {
               onCheckUpdate={checkForUpdate}
               onDownloadUpdate={downloadUpdate}
               onOpenDatabaseDir={openDatabaseDir}
+              onOpenPathDir={openPathDir}
               onOpenExternalUrl={openExternalUrl}
             />
             <TunnelDrawer

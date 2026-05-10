@@ -20,6 +20,7 @@ interface SettingsModalProps {
   onCheckUpdate: (manual?: boolean) => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
   onOpenDatabaseDir: () => Promise<void>;
+  onOpenPathDir: (path: string) => Promise<void>;
   onOpenExternalUrl: (url: string) => Promise<void>;
 }
 
@@ -47,6 +48,7 @@ export function SettingsModal({
   onCheckUpdate,
   onDownloadUpdate,
   onOpenDatabaseDir,
+  onOpenPathDir,
   onOpenExternalUrl,
 }: SettingsModalProps) {
   const [form] = Form.useForm<SettingsFormValues>();
@@ -281,9 +283,19 @@ export function SettingsModal({
               <div className="aboutInfoCardContent">
                 <span className="aboutInfoCardLabel">下载位置</span>
                 <span className="aboutInfoCardValue aboutInfoCardValue--path">
-                  <Typography.Text copyable ellipsis={{ tooltip: downloadedUpdatePath }}>
+                  <Typography.Text ellipsis={{ tooltip: downloadedUpdatePath }}>
                     {downloadedUpdatePath}
                   </Typography.Text>
+                  <Tooltip title="打开下载目录">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<FolderOpenOutlined />}
+                      aria-label="打开下载目录"
+                      className="aboutPathBtn"
+                      onClick={() => void onOpenPathDir(downloadedUpdatePath)}
+                    />
+                  </Tooltip>
                 </span>
               </div>
             </div>
