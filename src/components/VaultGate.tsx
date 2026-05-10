@@ -3,8 +3,9 @@ import { useEffect } from "react";
 
 interface VaultGateProps {
   open: boolean;
-  mode: "create" | "unlock" | "loading" | "ready";
+  mode: "create" | "unlock";
   loading: boolean;
+  initializing?: boolean;
   error?: string;
   onCreate: (masterPassword: string) => void | Promise<void>;
   onUnlock: (masterPassword: string) => void | Promise<void>;
@@ -15,7 +16,7 @@ interface FormValues {
   confirmPassword?: string;
 }
 
-export function VaultGate({ open, mode, loading, error, onCreate, onUnlock }: VaultGateProps) {
+export function VaultGate({ open, mode, loading, initializing, error, onCreate, onUnlock }: VaultGateProps) {
   const [form] = Form.useForm<FormValues>();
   const isCreate = mode === "create";
   const masterPassword = Form.useWatch("masterPassword", form) ?? "";

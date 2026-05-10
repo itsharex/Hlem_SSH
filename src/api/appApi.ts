@@ -47,6 +47,8 @@ export const appApi = {
     call<string>("download_update", () => browserDownload(url), { url, fileName }),
   downloadSignedUpdate: (url: string, fileName?: string | null, sha256?: string | null) =>
     call<string>("download_update", () => browserDownload(url), { url, fileName, sha256 }),
+  installUpdate: (installerPath: string) =>
+    call<void>("install_update", () => browserUnavailable("安装更新"), { installerPath }),
   openDatabaseDir: () => call<void>("open_database_dir", () => undefined),
   openPathDir: (path: string) => call<void>("open_path_dir", () => undefined, { path }),
   openExternalUrl: (url: string) => call<void>("open_external_url", () => browserOpenUrl(url), { url }),
@@ -218,6 +220,10 @@ function browserInfo(): AppInfo {
 function browserDownload(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
   return Promise.resolve("已在浏览器中打开下载地址");
+}
+
+function browserUnavailable(capability: string): Promise<never> {
+  return Promise.reject(new Error(`浏览器环境无法使用：${capability}`));
 }
 
 function browserOpenUrl(url: string) {

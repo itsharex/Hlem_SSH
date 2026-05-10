@@ -319,18 +319,6 @@ function App() {
     try {
       const next = await appApi.checkUpdate(info.version, info.arch);
       setUpdateInfo(next);
-      if (!next) return;
-      if (next.hasUpdate) {
-        if (!manual) return;
-        Modal.confirm({
-          title: `发现新版本 ${next.tagName}`,
-          content: next.asset ? `当前版本 ${info.version}，是否下载 ${next.asset.name}？` : "当前 Release 没有找到 Windows 安装包。",
-          okText: "下载更新",
-          cancelText: "稍后",
-          okButtonProps: { disabled: !next.asset },
-          onOk: () => downloadUpdate(next),
-        });
-      }
     } catch (error) {
       const message = getErrorMessage(error);
       if (manual) setUpdateError(message);
@@ -347,11 +335,19 @@ function App() {
     try {
       const path = await appApi.downloadSignedUpdate(target.asset.downloadUrl, target.asset.name, target.asset.sha256);
       setDownloadedUpdatePath(path);
-      Modal.success({ title: "更新包已下载", content: "正在启动安装程序，HelM 会自动退出以继续安装。" });
     } catch (error) {
       Modal.error({ title: "下载更新失败", content: getErrorMessage(error) });
     } finally {
       setUpdateDownloading(false);
+    }
+  }
+
+  async function installUpdate() {
+    if (!downloadedUpdatePath) return;
+    try {
+      await appApi.installUpdate(downloadedUpdatePath);
+    } catch (error) {
+      Modal.error({ title: "启动安装程序失败", content: getErrorMessage(error) });
     }
   }
 
@@ -1508,8 +1504,9 @@ function App() {
       {/* Vault 弹窗叠加 */}
       <VaultGate
           open={isVaultOpen}
-          mode={vaultMode === "create" ? "create" : vaultMode === "loading" ? "loading" : "unlock"}
-          loading={vaultBusy || vaultMode === "loading"}
+          mode={vaultMode === "create" ? "create" : "unlock"}
+          loading={vaultBusy}
+          initializing={vaultMode === "loading"}
           error={vaultError}
           onCreate={createVault}
           onUnlock={unlockVault}
@@ -1574,6 +1571,7 @@ function App() {
               updateRepo={appApi.updateRepo()}
               onCheckUpdate={checkForUpdate}
               onDownloadUpdate={downloadUpdate}
+              onInstallUpdate={installUpdate}
               onOpenDatabaseDir={openDatabaseDir}
               onOpenPathDir={openPathDir}
               onOpenExternalUrl={openExternalUrl}

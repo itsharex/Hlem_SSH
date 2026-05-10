@@ -1,5 +1,6 @@
-import { ApartmentOutlined, AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, FolderOpenOutlined, InfoCircleOutlined, LinkOutlined, RocketOutlined, SyncOutlined, TagsOutlined, WindowsOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, FolderOpenOutlined, InfoCircleOutlined, LinkOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, Typography } from "antd";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import type { AppInfo, AppSettings, UpdateInfo } from "../types";
 
@@ -19,6 +20,7 @@ interface SettingsModalProps {
   updateRepo: string;
   onCheckUpdate: (manual?: boolean) => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
   onOpenDatabaseDir: () => Promise<void>;
   onOpenPathDir: (path: string) => Promise<void>;
   onOpenExternalUrl: (url: string) => Promise<void>;
@@ -47,6 +49,7 @@ export function SettingsModal({
   updateRepo,
   onCheckUpdate,
   onDownloadUpdate,
+  onInstallUpdate,
   onOpenDatabaseDir,
   onOpenPathDir,
   onOpenExternalUrl,
@@ -82,7 +85,27 @@ export function SettingsModal({
   }
 
   const canDownloadUpdate = Boolean(updateInfo?.hasUpdate && updateInfo.asset);
-  const updateActionLoading = canDownloadUpdate ? updateDownloading : updateChecking;
+  const canInstallUpdate = Boolean(downloadedUpdatePath);
+  const updateActionLoading = canInstallUpdate ? false : canDownloadUpdate ? updateDownloading : updateChecking;
+  const updateActionLabel = canInstallUpdate ? "立即安装" : canDownloadUpdate ? "下载更新" : "检查更新";
+  const updateActionIcon = canInstallUpdate ? (
+    <RocketOutlined />
+  ) : canDownloadUpdate ? (
+    <CloudDownloadOutlined />
+  ) : (
+    <SyncOutlined spin={updateChecking} />
+  );
+  const handleUpdateAction = () => {
+    if (canInstallUpdate) {
+      void onInstallUpdate();
+      return;
+    }
+    if (canDownloadUpdate) {
+      void onDownloadUpdate();
+      return;
+    }
+    void onCheckUpdate(true);
+  };
 
   return (
     <Modal
@@ -155,16 +178,18 @@ export function SettingsModal({
           <h2 className="aboutHeroTitle">HelM</h2>
           <span className="aboutHeroVersion">
             {updateRepo ? (
-              <Typography.Link
-                className="aboutVersionLink"
-                href={updateInfo?.htmlUrl ?? `https://github.com/${updateRepo}/releases/latest`}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void onOpenExternalUrl(updateInfo?.htmlUrl ?? `https://github.com/${updateRepo}/releases/latest`);
-                }}
-              >
-                v{appInfo?.version ?? "0.0.0"}
-              </Typography.Link>
+              <Tooltip title={`点击查看 v${appInfo?.version ?? "0.0.0"} 的 Release 页面`}>
+                <Typography.Link
+                  className="aboutVersionLink"
+                  href={`https://github.com/${updateRepo}/releases/tag/v${appInfo?.version ?? "0.0.0"}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void onOpenExternalUrl(`https://github.com/${updateRepo}/releases/tag/v${appInfo?.version ?? "0.0.0"}`);
+                  }}
+                >
+                  v{appInfo?.version ?? "0.0.0"}
+                </Typography.Link>
+              </Tooltip>
             ) : (
               <span>v{appInfo?.version ?? "0.0.0"}</span>
             )}
@@ -174,20 +199,35 @@ export function SettingsModal({
 
         {/* 更新状态横幅 */}
         {updateInfo?.hasUpdate ? (
-          <div className="aboutStatusBanner aboutStatusBanner--success">
+          <button
+            type="button"
+            className="aboutStatusBanner aboutStatusBanner--success aboutStatusBanner--action"
+            onClick={() => setReleaseNotesOpen(true)}
+            aria-label="查看更新日志"
+          >
             <RocketOutlined className="aboutStatusIcon" />
             <div className="aboutStatusText">
-              <strong>发现新版本 {updateInfo.tagName}</strong>
-              <span>{updateInfo.asset ? updateInfo.asset.name : "当前 Release 没有找到 Windows 安装包"}</span>
+              <strong>发现新版本 {updateInfo.tagName || `v${updateInfo.latestVersion}`}</strong>
+              <span>
+                {updateInfo.asset
+                  ? `${updateInfo.asset.name} · ${formatBytes(updateInfo.asset.size)}`
+                  : "当前 Release 没有找到 Windows 安装包"}
+              </span>
             </div>
-          </div>
+          </button>
         ) : updateInfo ? (
-          <div className="aboutStatusBanner aboutStatusBanner--info">
+          <button
+            type="button"
+            className="aboutStatusBanner aboutStatusBanner--info aboutStatusBanner--action"
+            onClick={() => setReleaseNotesOpen(true)}
+            aria-label="查看更新日志"
+          >
             <CheckCircleOutlined className="aboutStatusIcon" />
             <div className="aboutStatusText">
-              <strong>当前已是最新版本</strong>
+              <strong>当前已是最新版本 {updateInfo.tagName || `v${updateInfo.latestVersion}`}</strong>
+              <span>点击查看更新日志</span>
             </div>
-          </div>
+          </button>
         ) : updateError ? (
           <div className="aboutStatusBanner aboutStatusBanner--warning">
             <ExclamationCircleOutlined className="aboutStatusIcon" />
@@ -242,41 +282,24 @@ export function SettingsModal({
               <span className="aboutInfoCardLabel">更新源</span>
               <span className="aboutInfoCardValue">
                 {updateRepo ? (
-                  <Typography.Link
-                    href={`https://github.com/${updateRepo}`}
-                    ellipsis
-                    onClick={(event) => {
-                      event.preventDefault();
-                      void onOpenExternalUrl(`https://github.com/${updateRepo}`);
-                    }}
-                  >
-                    {updateRepo}
-                  </Typography.Link>
+                  <Tooltip title="点击在浏览器打开 GitHub 仓库">
+                    <Typography.Link
+                      href={`https://github.com/${updateRepo}`}
+                      ellipsis
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void onOpenExternalUrl(`https://github.com/${updateRepo}`);
+                      }}
+                    >
+                      {updateRepo}
+                    </Typography.Link>
+                  </Tooltip>
                 ) : (
                   <Typography.Text type="secondary">未配置</Typography.Text>
                 )}
               </span>
             </div>
           </div>
-          {updateInfo ? (
-            <div className="aboutInfoCard">
-              <span className="aboutInfoCardIcon"><TagsOutlined /></span>
-              <div className="aboutInfoCardContent">
-                <span className="aboutInfoCardLabel">最新版本</span>
-                <span className="aboutInfoCardValue">
-                  <Typography.Link
-                    className="aboutLatestVersionLink"
-                    onClick={() => setReleaseNotesOpen(true)}
-                  >
-                    {updateInfo.tagName || updateInfo.latestVersion}
-                  </Typography.Link>
-                  {updateInfo.asset ? (
-                    <span className="aboutInfoCardMeta"> · {formatBytes(updateInfo.asset.size)}</span>
-                  ) : null}
-                </span>
-              </div>
-            </div>
-          ) : null}
           {downloadedUpdatePath ? (
             <div className="aboutInfoCard">
               <span className="aboutInfoCardIcon"><FolderOpenOutlined /></span>
@@ -307,32 +330,48 @@ export function SettingsModal({
           <Button
             className="aboutUpdateBtn"
             block
-            type={canDownloadUpdate ? "primary" : "default"}
-            icon={canDownloadUpdate ? <CloudDownloadOutlined /> : <SyncOutlined spin={updateChecking} />}
+            type={canInstallUpdate || canDownloadUpdate ? "primary" : "default"}
+            icon={updateActionIcon}
             loading={updateActionLoading}
-            disabled={!updateRepo || (Boolean(updateInfo?.hasUpdate) && !updateInfo?.asset)}
-            onClick={() => void (canDownloadUpdate ? onDownloadUpdate() : onCheckUpdate(true))}
+            disabled={!canInstallUpdate && (!updateRepo || (Boolean(updateInfo?.hasUpdate) && !updateInfo?.asset))}
+            onClick={handleUpdateAction}
             size="large"
           >
-            {canDownloadUpdate ? "下载更新" : "检查更新"}
+            {updateActionLabel}
           </Button>
         </div>
       </Modal>
       <Modal
         open={releaseNotesOpen}
-        title={`更新日志 ${updateInfo?.tagName || updateInfo?.latestVersion || ""}`}
+        title={null}
         className="releaseNotesModal"
-        okText="关闭"
-        cancelButtonProps={{ style: { display: "none" } }}
-        onOk={() => setReleaseNotesOpen(false)}
+        footer={null}
         onCancel={() => setReleaseNotesOpen(false)}
         destroyOnHidden
+        width={520}
       >
-        <div className="releaseNotesVersion">
-          <span>最新版本</span>
-          <strong>{updateInfo?.tagName || updateInfo?.latestVersion || "--"}</strong>
+        <div className="releaseNotesHeader">
+          <div className="releaseNotesHeaderIcon">
+            <RocketOutlined />
+          </div>
+          <div className="releaseNotesHeaderMeta">
+            <span className="releaseNotesLabel">更新日志</span>
+            <strong className="releaseNotesVersionTag">
+              {updateInfo?.tagName || (updateInfo?.latestVersion ? `v${updateInfo.latestVersion}` : "--")}
+            </strong>
+          </div>
+          {updateInfo?.publishedAt ? (
+            <span className="releaseNotesDate">{formatReleaseDate(updateInfo.publishedAt)}</span>
+          ) : null}
         </div>
-        <pre className="releaseNotesBody">{releaseNotesText(updateInfo)}</pre>
+
+        <div className="releaseNotesBody">{renderReleaseNotes(updateInfo)}</div>
+
+        <div className="releaseNotesFooter">
+          <Button type="primary" onClick={() => setReleaseNotesOpen(false)}>
+            关闭
+          </Button>
+        </div>
       </Modal>
     </Modal>
   );
@@ -351,8 +390,124 @@ function systemIcon(os?: string | null) {
   return <DesktopOutlined />;
 }
 
-function releaseNotesText(updateInfo: UpdateInfo | null) {
+function formatReleaseDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+type ReleaseNotesBlock =
+  | { type: "heading"; level: 2 | 3; text: string }
+  | { type: "list"; items: string[] }
+  | { type: "paragraph"; text: string };
+
+function parseReleaseNotesMarkdown(body: string): ReleaseNotesBlock[] {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReleaseNotesBlock[] = [];
+  let currentList: string[] | null = null;
+  let currentParagraph: string[] | null = null;
+
+  const flushList = () => {
+    if (currentList && currentList.length > 0) blocks.push({ type: "list", items: currentList });
+    currentList = null;
+  };
+  const flushParagraph = () => {
+    if (currentParagraph && currentParagraph.length > 0) {
+      blocks.push({ type: "paragraph", text: currentParagraph.join(" ") });
+    }
+    currentParagraph = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      flushList();
+      flushParagraph();
+      continue;
+    }
+    const h3 = line.match(/^###\s+(.+)$/);
+    const h2 = line.match(/^##\s+(.+)$/);
+    const listItem = line.match(/^[-*]\s+(.+)$/);
+    if (h3) {
+      flushList();
+      flushParagraph();
+      blocks.push({ type: "heading", level: 3, text: h3[1] });
+      continue;
+    }
+    if (h2) {
+      flushList();
+      flushParagraph();
+      blocks.push({ type: "heading", level: 2, text: h2[1] });
+      continue;
+    }
+    if (listItem) {
+      flushParagraph();
+      currentList ??= [];
+      currentList.push(listItem[1]);
+      continue;
+    }
+    flushList();
+    currentParagraph ??= [];
+    currentParagraph.push(line);
+  }
+  flushList();
+  flushParagraph();
+  return blocks;
+}
+
+function renderInline(text: string) {
+  // 处理 `inline code` 与 **加粗**；其余按普通文本保留
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith("`")) {
+      nodes.push(<code key={key++}>{token.slice(1, -1)}</code>);
+    } else {
+      nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
+function renderReleaseNotes(updateInfo: UpdateInfo | null) {
   const body = updateInfo?.body?.trim();
-  if (body) return body;
-  return "当前版本没有填写更新日志。";
+  if (!body) {
+    return <div className="releaseNotesEmpty">当前版本没有填写更新日志。</div>;
+  }
+  const blocks = parseReleaseNotesMarkdown(body);
+  return (
+    <div className="releaseNotesContent">
+      {blocks.map((block, index) => {
+        if (block.type === "heading") {
+          const Tag = block.level === 2 ? "h3" : "h4";
+          return (
+            <Tag key={index} className={`releaseNotesHeading releaseNotesHeading--h${block.level}`}>
+              {renderInline(block.text)}
+            </Tag>
+          );
+        }
+        if (block.type === "list") {
+          return (
+            <ul key={index} className="releaseNotesList">
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>{renderInline(item)}</li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={index} className="releaseNotesParagraph">
+            {renderInline(block.text)}
+          </p>
+        );
+      })}
+    </div>
+  );
 }

@@ -151,8 +151,23 @@ pub async fn download_update(
     tokio::fs::write(&target, bytes)
         .await
         .map_err(|error| AppError::Io(error.to_string()))?;
-    launch_update_installer(&app, &target)?;
     Ok(target.display().to_string())
+}
+
+#[tauri::command]
+pub fn install_update(app: AppHandle, installer_path: String) -> AppResult<()> {
+    let trimmed = installer_path.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput("安装包路径为空".to_string()));
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.exists() {
+        return Err(AppError::InvalidInput(format!(
+            "安装包不存在：{}",
+            path.display()
+        )));
+    }
+    launch_update_installer(&app, &path)
 }
 
 #[tauri::command]
