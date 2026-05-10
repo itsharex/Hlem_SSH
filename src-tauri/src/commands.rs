@@ -74,17 +74,38 @@ pub fn app_info(app: AppHandle) -> AppResult<AppInfo> {
 }
 
 #[tauri::command]
+pub async fn fetch_text_url(url: String) -> AppResult<String> {
+    let trimmed = validate_http_url(&url)?;
+    let response = reqwest::Client::new()
+        .get(trimmed)
+        .header(reqwest::header::USER_AGENT, "HelM-Updater")
+        .send()
+        .await
+        .map_err(|error| AppError::Remote(format!("读取远程内容失败：{error}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Remote(format!(
+            "读取远程内容失败：HTTP {}",
+            response.status()
+        )));
+    }
+    response
+        .text()
+        .await
+        .map_err(|error| AppError::Remote(format!("解析远程内容失败：{error}")))
+}
+
+#[tauri::command]
 pub async fn download_update(
     app: AppHandle,
     url: String,
     file_name: Option<String>,
     sha256: Option<String>,
 ) -> AppResult<String> {
-    let trimmed = url.trim();
-    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
-        return Err(AppError::InvalidInput("更新下载地址无效".to_string()));
-    }
-    let response = reqwest::get(trimmed)
+    let trimmed = validate_http_url(&url)?;
+    let response = reqwest::Client::new()
+        .get(trimmed)
+        .header(reqwest::header::USER_AGENT, "HelM-Updater")
+        .send()
         .await
         .map_err(|error| AppError::Remote(format!("下载更新失败：{error}")))?;
     if !response.status().is_success() {
@@ -135,11 +156,16 @@ pub fn open_database_dir(app: AppHandle) -> AppResult<()> {
 
 #[tauri::command]
 pub fn open_external_url(url: String) -> AppResult<()> {
-    let trimmed = url.trim();
-    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
-        return Err(AppError::InvalidInput("外部链接无效".to_string()));
-    }
+    let trimmed = validate_http_url(&url)?;
     open_url(trimmed)
+}
+
+fn validate_http_url(value: &str) -> AppResult<&str> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return Err(AppError::InvalidInput("链接地址无效".to_string()));
+    }
+    Ok(trimmed)
 }
 
 fn open_directory(path: &PathBuf) -> AppResult<()> {

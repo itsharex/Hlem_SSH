@@ -9,9 +9,9 @@ mod vault;
 
 use commands::{
     app_info, backup_record_delete, backup_record_restore, backup_records_clear, backup_run_now,
-    config_snapshot, download_update, forward_list, forward_start_dynamic, forward_start_local,
-    forward_start_remote, forward_stop, group_create, group_delete, group_update, open_database_dir,
-    open_external_url,
+    config_snapshot, download_update, fetch_text_url, forward_list, forward_start_dynamic,
+    forward_start_local, forward_start_remote, forward_stop, group_create, group_delete,
+    group_update, open_database_dir, open_external_url,
     resolve_vault_path, session_create, session_delete, session_duplicate, session_update,
     settings_update, sftp_copy, sftp_create_file, sftp_delete, sftp_list, sftp_mkdir, sftp_open,
     sftp_read_text, sftp_rename, sftp_search, sftp_write_text, ssh_connect, ssh_disconnect,
@@ -58,6 +58,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_version,
             app_info,
+            fetch_text_url,
             download_update,
             open_database_dir,
             open_external_url,

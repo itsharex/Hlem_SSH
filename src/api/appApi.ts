@@ -42,6 +42,7 @@ export const appApi = {
   info: () => call<AppInfo>("app_info", browserInfo),
   updateRepo: () => UPDATE_REPO,
   checkUpdate,
+  fetchTextUrl: (url: string) => call<string>("fetch_text_url", () => browserFetchText(url), { url }),
   downloadUpdate: (url: string, fileName?: string | null) =>
     call<string>("download_update", () => browserDownload(url), { url, fileName }),
   downloadSignedUpdate: (url: string, fileName?: string | null, sha256?: string | null) =>
@@ -64,15 +65,11 @@ async function checkUpdate(currentVersion: string, currentArch = ""): Promise<Up
 async function checkSignedManifest(currentVersion: string, currentArch: string): Promise<UpdateInfo | null> {
   const manifestUrl = `https://github.com/${UPDATE_REPO}/releases/latest/download/latest.json`;
   const signatureUrl = `${manifestUrl}.sig`;
-  const [manifestResponse, signatureResponse] = await Promise.all([
-    fetch(manifestUrl, { cache: "no-store" }),
-    fetch(signatureUrl, { cache: "no-store" }),
+  const [manifestText, signature] = await Promise.all([
+    appApi.fetchTextUrl(manifestUrl),
+    appApi.fetchTextUrl(signatureUrl),
   ]);
-  if (!manifestResponse.ok) throw new Error(`检查更新失败：latest.json HTTP ${manifestResponse.status}`);
-  if (!signatureResponse.ok) throw new Error(`检查更新失败：latest.json.sig HTTP ${signatureResponse.status}`);
-  const manifestText = await manifestResponse.text();
-  const signature = (await signatureResponse.text()).trim();
-  const verified = await verifyManifestSignature(manifestText, signature);
+  const verified = await verifyManifestSignature(manifestText, signature.trim());
   if (!verified) throw new Error("更新清单签名验证失败");
 
   const manifest = JSON.parse(manifestText) as SignedUpdateManifest;
@@ -94,11 +91,7 @@ async function checkSignedManifest(currentVersion: string, currentArch: string):
 }
 
 async function checkGitHubRelease(currentVersion: string): Promise<UpdateInfo | null> {
-  const response = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!response.ok) throw new Error(`检查更新失败：HTTP ${response.status}`);
-  const release = (await response.json()) as GitHubRelease;
+  const release = JSON.parse(await appApi.fetchTextUrl(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`)) as GitHubRelease;
   const tagName = release.tag_name || release.name || "";
   const latestVersion = normalizeVersion(tagName);
   if (!latestVersion) throw new Error("最新版本号无效");
@@ -228,4 +221,10 @@ function browserDownload(url: string) {
 
 function browserOpenUrl(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
+}
+
+async function browserFetchText(url: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`读取远程内容失败：HTTP ${response.status}`);
+  return response.text();
 }

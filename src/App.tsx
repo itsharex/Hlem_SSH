@@ -130,8 +130,12 @@ function App() {
 
   useEffect(() => {
     initializeVault();
-    void initializeAppInfoAndUpdate();
+    void initializeAppInfo();
+    const updateTimer = window.setTimeout(() => {
+      void checkForUpdate(false);
+    }, 1500);
     return () => {
+      window.clearTimeout(updateTimer);
       if (transferHistoryPersistTimerRef.current !== null) {
         window.clearTimeout(transferHistoryPersistTimerRef.current);
       }
@@ -269,13 +273,12 @@ function App() {
     }
   }
 
-  async function initializeAppInfoAndUpdate() {
+  async function initializeAppInfo() {
     try {
       const info = await appApi.info();
       setAppInfo(info);
-      await checkForUpdate(false, info);
     } catch {
-      // 版本信息和更新检查失败不影响主流程。
+      // 版本信息失败不影响主流程。
     }
   }
 
@@ -286,8 +289,8 @@ function App() {
       if (manual) Modal.warning({ title: "未配置更新源", content: "发布版会由 GitHub Actions 自动写入更新仓库地址。" });
       return;
     }
-    setUpdateChecking(true);
-    setUpdateError(null);
+    if (manual) setUpdateChecking(true);
+    if (manual) setUpdateError(null);
     try {
       const next = await appApi.checkUpdate(info.version, info.arch);
       setUpdateInfo(next);
@@ -308,10 +311,11 @@ function App() {
       }
     } catch (error) {
       const message = getErrorMessage(error);
-      setUpdateError(message);
+      if (manual) setUpdateError(message);
+      if (!manual) console.warn("[helm] auto update check failed:", message);
       if (manual) Modal.error({ title: "检查更新失败", content: message });
     } finally {
-      setUpdateChecking(false);
+      if (manual) setUpdateChecking(false);
     }
   }
 
