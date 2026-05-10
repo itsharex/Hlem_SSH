@@ -117,6 +117,7 @@ function App() {
   const autoBackupRunningRef = useRef(false);
   const inputHistorySaveTimerRef = useRef<number | null>(null);
   const autoUpdateTimerRef = useRef<number | null>(null);
+  const autoUpdateScheduledRef = useRef(false);
   const pendingConnectionIdsRef = useRef<Map<string, string>>(new Map());
   const abortedConnectSessionsRef = useRef<Set<string>>(new Set());
   const openSessions = useMemo(
@@ -143,6 +144,11 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (vaultMode !== "ready" || !appInfo) return;
+    scheduleAutoUpdateCheck(appInfo);
+  }, [appInfo, vaultMode]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -276,14 +282,14 @@ function App() {
     try {
       const info = await appApi.info();
       setAppInfo(info);
-      scheduleAutoUpdateCheck(info);
     } catch {
       // 版本信息失败不影响主流程。
     }
   }
 
   function scheduleAutoUpdateCheck(info: AppInfo) {
-    if (autoUpdateTimerRef.current !== null) return;
+    if (autoUpdateScheduledRef.current || autoUpdateTimerRef.current !== null) return;
+    autoUpdateScheduledRef.current = true;
     autoUpdateTimerRef.current = window.setTimeout(() => {
       autoUpdateTimerRef.current = null;
       runWhenBrowserIdle(() => void checkForUpdate(false, info));
@@ -409,6 +415,11 @@ function App() {
     setSettingsOpen(false);
     setTunnelOpen(false);
     setFileLoadingSessionIds(new Set());
+    autoUpdateScheduledRef.current = false;
+    if (autoUpdateTimerRef.current !== null) {
+      window.clearTimeout(autoUpdateTimerRef.current);
+      autoUpdateTimerRef.current = null;
+    }
     terminalSessionMapRef.current.clear();
     pendingTerminalEntriesRef.current.clear();
     clearTerminalOutputBuffers();

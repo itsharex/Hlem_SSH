@@ -180,70 +180,6 @@ jobs:
             "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), $_.Name
           } | Set-Content release-assets/SHA256SUMS.txt
 
-      - name: Generate signed update manifest
-        shell: pwsh
-        env:
-          HELM_RELEASE_VERSION: ${{ needs.version.outputs.version }}
-          HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
-          HELM_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.HELM_UPDATE_PRIVATE_KEY_PEM }}
-        run: |
-          if (-not $env:HELM_UPDATE_PRIVATE_KEY_PEM) {
-            throw "Missing GitHub secret HELM_UPDATE_PRIVATE_KEY_PEM."
-          }
-          @'
-          const crypto = require("crypto");
-          const fs = require("fs");
-          const path = require("path");
-
-          function archFromName(name) {
-            const lower = name.toLowerCase();
-            if (lower.includes("win-arm64") || lower.includes("aarch64")) return "arm64";
-            if (lower.includes("win-x86") || lower.includes("i686")) return "x86";
-            return "x64";
-          }
-
-          const releaseDir = "release-assets";
-          const tag = process.env.HELM_RELEASE_TAG;
-          const repo = process.env.GITHUB_REPOSITORY;
-          const exeFiles = fs.readdirSync(releaseDir)
-            .filter((name) => name.toLowerCase().endsWith(".exe"))
-            .sort();
-          if (!exeFiles.length) throw new Error("No exe assets found for update manifest.");
-
-          const assets = exeFiles.map((name) => {
-            const filePath = path.join(releaseDir, name);
-            const bytes = fs.readFileSync(filePath);
-            return {
-              platform: "windows",
-              arch: archFromName(name),
-              name,
-              url: `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`,
-              size: bytes.length,
-              sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
-            };
-          });
-
-          const manifest = {
-            version: 1,
-            appVersion: process.env.HELM_RELEASE_VERSION,
-            tagName: tag,
-            htmlUrl: `https://github.com/${repo}/releases/tag/${tag}`,
-            publishedAt: new Date().toISOString(),
-            assets,
-          };
-          const payload = `${JSON.stringify(manifest, null, 2)}\n`;
-          fs.writeFileSync(path.join(releaseDir, "latest.json"), payload, "utf8");
-
-          const privateKey = process.env.HELM_UPDATE_PRIVATE_KEY_PEM.replace(/\\n/g, "\n");
-          const signature = crypto.sign("sha256", Buffer.from(payload, "utf8"), {
-            key: privateKey,
-            padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-            saltLength: 32,
-          });
-          fs.writeFileSync(path.join(releaseDir, "latest.json.sig"), `${signature.toString("base64")}\n`, "utf8");
-          '@ | Set-Content sign-update.cjs
-          node sign-update.cjs
-
       - name: Generate release notes
         shell: pwsh
         env:
@@ -272,6 +208,74 @@ jobs:
 
           See `SHA256SUMS.txt` in the release assets.
           "@ | Set-Content RELEASE_NOTES.md
+
+      - name: Generate signed update manifest
+        shell: pwsh
+        env:
+          HELM_RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          HELM_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.HELM_UPDATE_PRIVATE_KEY_PEM }}
+        run: |
+          if (-not $env:HELM_UPDATE_PRIVATE_KEY_PEM) {
+            throw "Missing GitHub secret HELM_UPDATE_PRIVATE_KEY_PEM."
+          }
+          @'
+          const crypto = require("crypto");
+          const fs = require("fs");
+          const path = require("path");
+
+          function archFromName(name) {
+            const lower = name.toLowerCase();
+            if (lower.includes("win-arm64") || lower.includes("aarch64")) return "arm64";
+            if (lower.includes("win-x86") || lower.includes("i686")) return "x86";
+            return "x64";
+          }
+
+          const releaseDir = "release-assets";
+          const tag = process.env.HELM_RELEASE_TAG;
+          const repo = process.env.GITHUB_REPOSITORY;
+          const releaseNotes = fs.existsSync("RELEASE_NOTES.md")
+            ? fs.readFileSync("RELEASE_NOTES.md", "utf8").trim()
+            : "";
+          const exeFiles = fs.readdirSync(releaseDir)
+            .filter((name) => name.toLowerCase().endsWith(".exe"))
+            .sort();
+          if (!exeFiles.length) throw new Error("No exe assets found for update manifest.");
+
+          const assets = exeFiles.map((name) => {
+            const filePath = path.join(releaseDir, name);
+            const bytes = fs.readFileSync(filePath);
+            return {
+              platform: "windows",
+              arch: archFromName(name),
+              name,
+              url: `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`,
+              size: bytes.length,
+              sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+            };
+          });
+
+          const manifest = {
+            version: 1,
+            appVersion: process.env.HELM_RELEASE_VERSION,
+            tagName: tag,
+            htmlUrl: `https://github.com/${repo}/releases/tag/${tag}`,
+            publishedAt: new Date().toISOString(),
+            body: releaseNotes,
+            assets,
+          };
+          const payload = `${JSON.stringify(manifest, null, 2)}\n`;
+          fs.writeFileSync(path.join(releaseDir, "latest.json"), payload, "utf8");
+
+          const privateKey = process.env.HELM_UPDATE_PRIVATE_KEY_PEM.replace(/\\n/g, "\n");
+          const signature = crypto.sign("sha256", Buffer.from(payload, "utf8"), {
+            key: privateKey,
+            padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+            saltLength: 32,
+          });
+          fs.writeFileSync(path.join(releaseDir, "latest.json.sig"), `${signature.toString("base64")}\n`, "utf8");
+          '@ | Set-Content sign-update.cjs
+          node sign-update.cjs
 
       - name: Create and push tag
         shell: pwsh
