@@ -306,8 +306,6 @@ function App() {
           okButtonProps: { disabled: !next.asset },
           onOk: () => downloadUpdate(next),
         });
-      } else if (manual) {
-        Modal.info({ title: "当前已是最新版本", content: `当前版本：${info.version}` });
       }
     } catch (error) {
       const message = getErrorMessage(error);

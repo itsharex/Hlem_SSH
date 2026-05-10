@@ -511,6 +511,39 @@
   font-weight: 500;
 }
 
+.aboutLatestVersionLink.ant-typography {
+  font-weight: 700;
+}
+
+.releaseNotesVersion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .9);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.releaseNotesVersion strong {
+  color: var(--text-primary);
+}
+
+.releaseNotesBody {
+  margin: 12px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .aboutPathBtn {
   flex: 0 0 auto;
   width: 26px !important;

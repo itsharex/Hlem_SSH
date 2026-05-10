@@ -51,6 +51,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [form] = Form.useForm<SettingsFormValues>();
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const enabled = Form.useWatch("enabled", form);
 
   useEffect(() => {
@@ -261,7 +262,12 @@ export function SettingsModal({
               <div className="aboutInfoCardContent">
                 <span className="aboutInfoCardLabel">最新版本</span>
                 <span className="aboutInfoCardValue">
-                  {updateInfo.tagName || updateInfo.latestVersion}
+                  <Typography.Link
+                    className="aboutLatestVersionLink"
+                    onClick={() => setReleaseNotesOpen(true)}
+                  >
+                    {updateInfo.tagName || updateInfo.latestVersion}
+                  </Typography.Link>
                   {updateInfo.asset ? (
                     <span className="aboutInfoCardMeta"> · {formatBytes(updateInfo.asset.size)}</span>
                   ) : null}
@@ -300,6 +306,22 @@ export function SettingsModal({
           </Button>
         </div>
       </Modal>
+      <Modal
+        open={releaseNotesOpen}
+        title={`更新日志 ${updateInfo?.tagName || updateInfo?.latestVersion || ""}`}
+        className="releaseNotesModal"
+        okText="关闭"
+        cancelButtonProps={{ style: { display: "none" } }}
+        onOk={() => setReleaseNotesOpen(false)}
+        onCancel={() => setReleaseNotesOpen(false)}
+        destroyOnHidden
+      >
+        <div className="releaseNotesVersion">
+          <span>最新版本</span>
+          <strong>{updateInfo?.tagName || updateInfo?.latestVersion || "--"}</strong>
+        </div>
+        <pre className="releaseNotesBody">{releaseNotesText(updateInfo)}</pre>
+      </Modal>
     </Modal>
   );
 }
@@ -315,4 +337,10 @@ function systemIcon(os?: string | null) {
   if (value.includes("windows")) return <WindowsOutlined />;
   if (value.includes("mac")) return <AppleOutlined />;
   return <DesktopOutlined />;
+}
+
+function releaseNotesText(updateInfo: UpdateInfo | null) {
+  const body = updateInfo?.body?.trim();
+  if (body) return body;
+  return "当前版本没有填写更新日志。";
 }
