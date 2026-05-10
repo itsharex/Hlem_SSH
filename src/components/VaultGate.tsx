@@ -49,7 +49,7 @@ export function VaultGate({ open, mode, loading, error, onCreate, onUnlock }: Va
       width={400}
       styles={{
         mask: { backdropFilter: "blur(8px)", background: "rgba(244, 247, 250, 0.7)" },
-        content: {
+        container: {
           padding: 0,
           borderRadius: 16,
           overflow: "hidden",

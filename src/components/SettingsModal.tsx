@@ -95,7 +95,7 @@ export function SettingsModal({
       onCancel={onClose}
       destroyOnHidden
     >
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <div className="settingsPanel">
           <div className="settingsSectionTitle">数据与连接</div>
           <div className="settingsShortcutGrid">

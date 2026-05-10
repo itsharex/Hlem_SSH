@@ -201,7 +201,7 @@ export function BackupModal({
             <Tooltip
               mouseEnterDelay={0.4}
               placement="topLeft"
-              overlayClassName="backupRecordRowTooltip"
+              classNames={{ root: "backupRecordRowTooltip" }}
               title={
                 <div className="backupRecordRowTooltipContent">
                   <div><span>时间</span>{new Date(record.createdAt).toLocaleString()}</div>

@@ -591,7 +591,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
           <Dropdown
             trigger={["click"]}
             placement="topRight"
-            overlayClassName="terminalHistoryDropdown"
+            classNames={{ root: "terminalHistoryDropdown" }}
             open={historyOpen}
             onOpenChange={setHistoryOpen}
             menu={{

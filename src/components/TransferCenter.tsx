@@ -303,7 +303,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
       key={`transfer-${transfer.transferId}`}
       title={detailTooltip}
       placement="left"
-      overlayClassName="detailHoverTooltip transferDetailHoverTooltip"
+      classNames={{ root: "detailHoverTooltip transferDetailHoverTooltip" }}
     >
       <article className="transferListItem">
         <div className="transferListHeader">

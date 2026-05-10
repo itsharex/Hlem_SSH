@@ -800,7 +800,7 @@ export function FileManager({
                     key={item.id}
                     title={quickCommandDetailTooltip(item)}
                     placement="bottom"
-                    overlayClassName="detailHoverTooltip"
+                    classNames={{ root: "detailHoverTooltip" }}
                   >
                     <span
                       className="quickCommandTag"
