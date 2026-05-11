@@ -722,31 +722,23 @@
 
 /* ─── 常用命令折叠抽屉面板 ───────────────────────────────────────────── */
 .quickCommandDrawer {
-  display: grid;
-  grid-template-rows: 0fr;
-  max-height: 0;
-  border-bottom: 1px solid rgba(99, 102, 241, .2);
+  height: 0;
+  border-bottom: 1px solid transparent;
   background: linear-gradient(180deg, #f1f5ff 0%, #f8faff 100%);
   overflow: hidden;
   opacity: 0;
-  transition: max-height .28s cubic-bezier(.4, 0, .2, 1), opacity .22s ease, grid-template-rows .28s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity .14s ease, transform .14s ease, border-color .14s ease;
+  contain: layout paint style;
 }
 
 .quickCommandDrawer-open {
-  grid-template-rows: auto minmax(0, 1fr);
-  max-height: min(190px, 38vh);
+  height: auto;
+  border-bottom-color: rgba(99, 102, 241, .2);
   opacity: 1;
-}
-
-@keyframes quickDrawerSlideDown {
-  from {
-    max-height: 0;
-    opacity: 0;
-  }
-  to {
-    max-height: min(190px, 38vh);
-    opacity: 1;
-  }
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .quickCommandDrawerHeader {
@@ -799,7 +791,7 @@
 }
 
 .quickCommandDrawer .quickCommandScrollList {
-  max-height: 136px;
+  max-height: calc(min(190px, 38vh) - 34px);
   overflow-y: auto;
   padding: 8px 10px;
   scrollbar-width: thin;
@@ -808,6 +800,7 @@
   flex-wrap: wrap;
   align-content: flex-start;
   gap: 6px;
+  contain: content;
 }
 
 .quickCommandDrawer .quickCommandScrollList::-webkit-scrollbar {

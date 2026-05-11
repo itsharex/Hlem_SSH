@@ -38,6 +38,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
   const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => mergeInputHistory(loadInputHistory(), inputHistoryProp));
   const onInputHistoryChangeRef = useRef(onInputHistoryChange);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [hoveredHistoryIndex, setHoveredHistoryIndex] = useState<number | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [inputScrollLeft, setInputScrollLeft] = useState(0);
   const terminalHostRef = useRef<HTMLDivElement>(null);
@@ -497,6 +498,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
   }
 
   function deleteHistoryEntry(index: number) {
+    setHoveredHistoryIndex((current) => (current === index ? null : current));
     setInputHistory((prev) => {
       const next = prev.filter((_, i) => i !== index);
       saveInputHistory(next);
@@ -512,7 +514,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
         : inputHistory.map((entry, index) => ({
             key: String(index),
             label: (
-              <span className="terminalHistoryTimelineItem">
+              <span className="terminalHistoryTimelineItem" onMouseEnter={() => setHoveredHistoryIndex(index)}>
                 <span className="terminalHistoryTime">{formatHistoryTime(entry.timestamp)}</span>
                 <span className="terminalHistoryItem">{entry.command}</span>
                 <DeleteOutlined
@@ -527,6 +529,16 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
           })),
     [inputHistory],
   );
+  const hoveredHistoryEntry = hoveredHistoryIndex === null ? null : inputHistory[hoveredHistoryIndex] ?? null;
+  const historyPreview = historyOpen && hoveredHistoryEntry ? (
+    <div className="terminalHistoryPreviewPanel" aria-hidden="true">
+      <pre className="terminalHistoryPreviewCommand">{renderCommandHighlight(hoveredHistoryEntry.command)}</pre>
+      <div className="terminalHistoryPreviewMeta">
+        <span>创建时间</span>
+        <strong>{formatHistoryPreviewTime(hoveredHistoryEntry.timestamp)}</strong>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <section className="terminalPanel">
@@ -593,7 +605,16 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
             placement="topRight"
             classNames={{ root: "terminalHistoryDropdown" }}
             open={historyOpen}
-            onOpenChange={setHistoryOpen}
+            onOpenChange={(open) => {
+              setHistoryOpen(open);
+              if (!open) setHoveredHistoryIndex(null);
+            }}
+            popupRender={(menus) => (
+              <div className="terminalHistoryPopupWrap" onMouseLeave={() => setHoveredHistoryIndex(null)}>
+                {menus}
+                {historyPreview}
+              </div>
+            )}
             menu={{
               items: historyMenuItems,
               onClick: ({ key }) => {
@@ -860,8 +881,26 @@ const historyTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
+const historyPreviewTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
 function formatHistoryTime(timestamp: number) {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "--/-- --:--";
   return historyTimeFormatter.format(date);
+}
+
+function formatHistoryPreviewTime(timestamp: number) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "---- -- -- --:--:--";
+  const parts = Object.fromEntries(historyPreviewTimeFormatter.formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }

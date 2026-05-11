@@ -207,6 +207,69 @@
   vertical-align: middle;
 }
 
+.terminalHistoryDropdown {
+  overflow: visible;
+}
+
+.terminalHistoryPopupWrap {
+  position: relative;
+}
+
+.terminalHistoryPreviewPanel {
+  position: absolute;
+  right: calc(100% + 10px);
+  bottom: 0;
+  width: clamp(320px, calc(100vw - 390px), 650px);
+  min-width: 320px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid rgba(125, 151, 185, .24);
+  border-radius: 8px;
+  background: rgba(248, 251, 255, .98);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, .14), 0 2px 8px rgba(37, 99, 235, .08);
+  color: var(--term-text);
+  pointer-events: none;
+}
+
+.terminalHistoryPreviewCommand {
+  max-height: 168px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(147, 197, 253, .42);
+  border-radius: 7px;
+  background: #eef6ff;
+  color: var(--term-text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.terminalHistoryPreviewMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 12px;
+  color: rgba(100, 116, 139, .8);
+  font-size: 12px;
+}
+
+.terminalHistoryPreviewMeta strong {
+  min-width: 0;
+  color: #1d4ed8;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .terminalHistoryDropdown .ant-dropdown-menu {
   width: 340px;
   max-width: 340px;
@@ -249,6 +312,15 @@
   display: none;
   width: 0;
   height: 0;
+}
+
+@media (max-width: 760px) {
+  .terminalHistoryPreviewPanel {
+    right: 0;
+    bottom: calc(100% + 8px);
+    width: min(520px, calc(100vw - 28px));
+    min-width: 0;
+  }
 }
 
 .terminalToolbar::after {
@@ -351,4 +423,3 @@
   height: 1px;
   pointer-events: none;
 }
-
