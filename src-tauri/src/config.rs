@@ -118,6 +118,8 @@ pub struct AppSettings {
     pub quick_commands: Vec<QuickCommand>,
     #[serde(default)]
     pub terminal_input_history: Vec<TerminalInputHistoryEntry>,
+    #[serde(default)]
+    pub ignored_update_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

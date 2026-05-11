@@ -21,6 +21,8 @@ import {
   SaveOutlined,
   SearchOutlined,
   SettingOutlined,
+  TagOutlined,
+  ThunderboltOutlined,
   UpOutlined,
 } from "@ant-design/icons";
 import { App as AntdApp, Button, Dropdown, Form, Input, Modal, Radio, Space, Spin, Table, Tooltip, Tree } from "antd";
@@ -886,34 +888,69 @@ export function FileManager({
       <Modal
         open={commandDialogOpen}
         className="commandDialogModal"
-        title={commandEditingId ? "编辑常用命令" : "添加常用命令"}
-        okText={commandEditingId ? "保存" : "添加"}
-        cancelText="取消"
+        title={null}
+        footer={null}
+        closable
+        width={460}
         onCancel={() => {
           setCommandDialogOpen(false);
           setCommandEditingId(null);
         }}
-        onOk={addQuickCommand}
         destroyOnHidden
       >
-        <Form layout="vertical">
-          <Form.Item label="名称">
+        <div className="commandDialogHeader">
+          <div className="commandDialogHeaderIcon">
+            <ThunderboltOutlined />
+          </div>
+          <div className="commandDialogHeaderMeta">
+            <span className="commandDialogLabel">常用命令</span>
+            <strong className="commandDialogTitle">
+              {commandEditingId ? "编辑常用命令" : "添加常用命令"}
+            </strong>
+            <span className="commandDialogSubtitle">
+              {commandEditingId ? "更新名称或命令内容后立即生效" : "保存后可在命令面板中一键运行"}
+            </span>
+          </div>
+        </div>
+        <Form layout="vertical" className="commandDialogForm" onFinish={addQuickCommand}>
+          <Form.Item label={<span className="commandDialogFieldLabel"><TagOutlined /> 名称</span>}>
             <Input
               autoFocus
+              placeholder="例如：查看系统负载"
+              maxLength={40}
+              showCount
               value={commandName}
               onChange={(event) => setCommandName(event.target.value)}
               onPressEnter={addQuickCommand}
             />
           </Form.Item>
-          <Form.Item label="命令">
+          <Form.Item label={<span className="commandDialogFieldLabel"><CodeOutlined /> 命令</span>}>
             <Input.TextArea
               className="commandDialogTextarea"
               autoSize={{ minRows: 6, maxRows: 14 }}
+              placeholder={"例如：\ntop -bn1 | head -n 20"}
               value={commandValue}
               onChange={(event) => setCommandValue(event.target.value)}
             />
           </Form.Item>
         </Form>
+        <div className="commandDialogFooter">
+          <Button
+            onClick={() => {
+              setCommandDialogOpen(false);
+              setCommandEditingId(null);
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            type="primary"
+            icon={commandEditingId ? <SaveOutlined /> : <PlusOutlined />}
+            onClick={addQuickCommand}
+          >
+            {commandEditingId ? "保存" : "添加"}
+          </Button>
+        </div>
       </Modal>
       <Modal
         open={Boolean(dialog)}

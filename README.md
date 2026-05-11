@@ -1,6 +1,6 @@
 # HelM
 
-> 一个基于 **Tauri 2** + **React 18** + **TypeScript** + **Rust** 构建的跨平台 SSH/SFTP 桌面工作站。
+> 一个基于 **Tauri 2** + **React 19** + **TypeScript** + **Rust** 构建的跨平台 SSH/SFTP 桌面工作站。
 > 单一可执行文件、原生窗口、零云端依赖，把多服务器运维所需的"终端 + 文件 + 转发 + 编辑 + 备份"收拢在一个加密工作区里。
 
 ## 功能特性
@@ -81,7 +81,7 @@ graph TB
     subgraph Desktop["HelM Desktop App · Tauri 2"]
         direction TB
 
-        subgraph Frontend["Frontend · WebView (React 18 + Ant Design 5)"]
+        subgraph Frontend["Frontend · WebView (React 19 + Ant Design 6)"]
             direction TB
             subgraph MainWin["主窗口"]
                 TopBar["TopBar<br/>会话/分组/状态"]
@@ -225,8 +225,8 @@ vault.rpvault  (本地)
 
 | 层级 | 技术 |
 |------|------|
-| 前端框架 | React 18 · TypeScript 5 · Vite 5 |
-| UI 组件 | Ant Design 5 · @ant-design/icons |
+| 前端框架 | React 19 · TypeScript 6 · Vite 8 |
+| UI 组件 | Ant Design 6 · @ant-design/icons |
 | 终端 / 编辑 | xterm.js 6 + addon-fit · CodeMirror 6（JS/TS/Python/SQL/JSON/YAML/CSS/HTML） |
 | 桌面运行时 | Tauri 2（tray-icon · plugin-dialog） |
 | 后端语言 | Rust 2021（stable） |
@@ -235,7 +235,7 @@ vault.rpvault  (本地)
 | 加密 | ChaCha20-Poly1305 · Argon2 · HMAC-SHA256 · zeroize |
 | 备份 / 云端 | reqwest（rustls-tls）· zip · WebDAV · AWS S3 SigV4 |
 | 测试 | Playwright（E2E） |
-| 构建 | Vite · Cargo · `build.ps1`（PowerShell） |
+| 构建 | Vite 8 · Cargo · `build.ps1`（PowerShell） |
 
 ## 开发环境
 

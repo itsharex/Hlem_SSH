@@ -295,6 +295,7 @@ function normalizeBrowserSnapshot(snapshot: ConfigSnapshot) {
   snapshot.data.settings ??= { proxy: null, backup: defaultBackupSettings() };
   snapshot.data.settings.backup ??= defaultBackupSettings();
   snapshot.data.settings.quickCommands ??= [];
+  snapshot.data.settings.ignoredUpdateVersions ??= [];
   snapshot.data.tunnels ??= [];
   snapshot.data.backupRecords ??= [];
   snapshot.data.sessions = snapshot.data.sessions.map((session) => ({
@@ -310,7 +311,7 @@ function createDefaultVaultData(): VaultData {
     version: 1,
     updatedAt: timestamp,
     knownHosts: [],
-    settings: { proxy: null, backup: defaultBackupSettings(), quickCommands: [] },
+    settings: { proxy: null, backup: defaultBackupSettings(), quickCommands: [], ignoredUpdateVersions: [] },
     tunnels: [],
     backupRecords: [],
     groups: [

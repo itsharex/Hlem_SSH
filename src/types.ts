@@ -98,6 +98,7 @@ export interface AppSettings {
   backup: BackupSettings;
   quickCommands?: QuickCommand[];
   terminalInputHistory?: TerminalInputHistoryEntry[];
+  ignoredUpdateVersions?: string[];
 }
 
 export interface TerminalInputHistoryEntry {

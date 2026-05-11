@@ -740,6 +740,52 @@
   background: #fafbfc;
 }
 
+.releaseNotesFooter .ant-btn {
+  height: 38px !important;
+  min-width: 116px;
+  padding: 0 18px !important;
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .2px;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.releaseNotesFooter .ant-btn-default {
+  border: 1px solid rgba(99, 102, 241, .25) !important;
+  background: linear-gradient(135deg, #f8faff 0%, #f0edff 100%) !important;
+  color: #4338ca !important;
+  box-shadow: 0 4px 10px -6px rgba(99, 102, 241, .3) !important;
+}
+
+.releaseNotesFooter .ant-btn-default .ant-btn-icon {
+  color: #6366f1 !important;
+}
+
+.releaseNotesFooter .ant-btn-default:not(:disabled):hover {
+  border-color: rgba(99, 102, 241, .5) !important;
+  background: linear-gradient(135deg, #eef2ff 0%, #ede9fe 100%) !important;
+  color: #4338ca !important;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px -8px rgba(99, 102, 241, .45) !important;
+}
+
+.releaseNotesFooter .ant-btn-primary {
+  border: 0 !important;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 20px -6px rgba(99, 102, 241, .5) !important;
+}
+
+.releaseNotesFooter .ant-btn-primary:not(:disabled):hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 12px 24px -6px rgba(99, 102, 241, .6) !important;
+}
+
+.releaseNotesFooter .ant-btn:not(:disabled):active {
+  transform: translateY(0) !important;
+}
+
 .aboutPathBtn {
   flex: 0 0 auto;
   width: 26px !important;

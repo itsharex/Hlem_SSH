@@ -1,4 +1,4 @@
-import { ApartmentOutlined, AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, FolderOpenOutlined, InfoCircleOutlined, LinkOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, EyeInvisibleOutlined, FolderOpenOutlined, InfoCircleOutlined, LinkOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, Typography } from "antd";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -21,6 +21,7 @@ interface SettingsModalProps {
   onCheckUpdate: (manual?: boolean) => Promise<void>;
   onDownloadUpdate: () => Promise<void>;
   onInstallUpdate: () => Promise<void>;
+  onIgnoreUpdate: () => Promise<void>;
   onOpenDatabaseDir: () => Promise<void>;
   onOpenPathDir: (path: string) => Promise<void>;
   onOpenExternalUrl: (url: string) => Promise<void>;
@@ -50,6 +51,7 @@ export function SettingsModal({
   onCheckUpdate,
   onDownloadUpdate,
   onInstallUpdate,
+  onIgnoreUpdate,
   onOpenDatabaseDir,
   onOpenPathDir,
   onOpenExternalUrl,
@@ -368,9 +370,37 @@ export function SettingsModal({
         <div className="releaseNotesBody">{renderReleaseNotes(updateInfo)}</div>
 
         <div className="releaseNotesFooter">
-          <Button type="primary" onClick={() => setReleaseNotesOpen(false)}>
-            关闭
-          </Button>
+          {updateInfo?.hasUpdate ? (
+            <>
+              <Button
+                className="releaseNotesIgnoreBtn"
+                icon={<EyeInvisibleOutlined />}
+                onClick={() => {
+                  void onIgnoreUpdate();
+                  setReleaseNotesOpen(false);
+                }}
+              >
+                忽略版本
+              </Button>
+              <Button
+                className="aboutUpdateBtn releaseNotesDownloadBtn"
+                type="primary"
+                icon={<CloudDownloadOutlined />}
+                loading={updateDownloading}
+                disabled={!canDownloadUpdate}
+                onClick={() => {
+                  void onDownloadUpdate();
+                  setReleaseNotesOpen(false);
+                }}
+              >
+                下载更新
+              </Button>
+            </>
+          ) : (
+            <Button type="primary" onClick={() => setReleaseNotesOpen(false)}>
+              关闭
+            </Button>
+          )}
         </div>
       </Modal>
     </Modal>

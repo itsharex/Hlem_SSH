@@ -45,11 +45,7 @@ jobs:
           if ($manual) {
             $version = $manual
           } else {
-            $parts = $base.Split('.')
-            if ($parts.Length -lt 2) {
-              throw "package.json version must be semver-like, got '$base'"
-            }
-            $version = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
+            $version = $base
           }
           if ($version -notmatch '^\d+\.\d+\.\d+([-.+][0-9A-Za-z.-]+)?$') {
             throw "Invalid version '$version'"
@@ -188,13 +184,13 @@ jobs:
         env:
           HELM_RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          $previous = git describe --tags --abbrev=0 2>$null
+          $previous = git describe --tags --abbrev=0 HEAD^ 2>$null
           if ($LASTEXITCODE -eq 0 -and $previous) {
             $range = "$previous..HEAD"
           } else {
             $range = "HEAD"
           }
-          $commits = git log $range --pretty=format:"- %s (%h)"
+          $commits = git log $range --max-count=30 --no-merges --pretty=format:"- %s (%h)"
           if (-not $commits) {
             $commits = "- Initial automated Windows release."
           }

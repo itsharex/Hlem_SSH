@@ -343,7 +343,17 @@ function App() {
     if (manual) setUpdateError(null);
     try {
       const next = await appApi.checkUpdate(info.version, info.arch);
-      setUpdateInfo(next);
+      if (next) {
+        const ignored = configSnapshotRef.current?.data.settings?.ignoredUpdateVersions ?? [];
+        const candidate = normalizeIgnoredVersion(next.latestVersion, next.tagName);
+        if (next.hasUpdate && candidate && ignored.includes(candidate)) {
+          setUpdateInfo({ ...next, hasUpdate: false });
+        } else {
+          setUpdateInfo(next);
+        }
+      } else {
+        setUpdateInfo(next);
+      }
     } catch (error) {
       const message = getErrorMessage(error);
       if (manual) setUpdateError(message);
@@ -373,6 +383,29 @@ function App() {
       await appApi.installUpdate(downloadedUpdatePath);
     } catch (error) {
       Modal.error({ title: "启动安装程序失败", content: getErrorMessage(error) });
+    }
+  }
+
+  async function ignoreUpdateVersion(target = updateInfo) {
+    const snapshot = configSnapshotRef.current;
+    if (!target || !snapshot) return;
+    const candidate = normalizeIgnoredVersion(target.latestVersion, target.tagName);
+    if (!candidate) return;
+    const previous = snapshot.data.settings?.ignoredUpdateVersions ?? [];
+    if (previous.includes(candidate)) {
+      setUpdateInfo({ ...target, hasUpdate: false });
+      return;
+    }
+    try {
+      const next = await vaultApi.settingsUpdate({
+        ...snapshot.data.settings,
+        backup: snapshot.data.settings.backup ?? defaultBackupSettings(),
+        ignoredUpdateVersions: [...previous, candidate],
+      });
+      setConfigSnapshot(next);
+      setUpdateInfo({ ...target, hasUpdate: false });
+    } catch (error) {
+      Modal.error({ title: "忽略版本失败", content: getErrorMessage(error) });
     }
   }
 
@@ -1597,6 +1630,7 @@ function App() {
               onCheckUpdate={checkForUpdate}
               onDownloadUpdate={downloadUpdate}
               onInstallUpdate={installUpdate}
+              onIgnoreUpdate={ignoreUpdateVersion}
               onOpenDatabaseDir={openDatabaseDir}
               onOpenPathDir={openPathDir}
               onOpenExternalUrl={openExternalUrl}
@@ -1732,6 +1766,12 @@ function isTransferStatus(status: unknown): status is TransferInfo["status"] {
     status === "failed" ||
     status === "canceled"
   );
+}
+
+function normalizeIgnoredVersion(latestVersion: string | undefined, tagName: string | undefined) {
+  const candidate = (latestVersion || tagName || "").trim();
+  if (!candidate) return "";
+  return candidate.replace(/^v/i, "");
 }
 
 export default App;
