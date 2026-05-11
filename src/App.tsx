@@ -1,8 +1,10 @@
 import { Modal } from "antd";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { appApi } from "./api/appApi";
 import { appEvents } from "./api/appEvents";
 import { remoteApi } from "./api/remoteApi";
+import { isTauriRuntime } from "./api/runtime";
 import { defaultBackupSettings, vaultApi } from "./api/vaultApi";
 import {
   BackupModal,
@@ -131,7 +133,6 @@ function App() {
 
   useEffect(() => {
     initializeVault();
-    void initializeAppInfo();
     return () => {
       if (autoUpdateTimerRef.current !== null) {
         window.clearTimeout(autoUpdateTimerRef.current);
@@ -171,6 +172,7 @@ function App() {
   }, [configSnapshot]);
 
   useEffect(() => {
+    if (vaultMode !== "ready") return;
     let disposed = false;
     let cleanups: Array<() => void> = [];
     void Promise.all([
@@ -209,10 +211,12 @@ function App() {
       disposed = true;
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, []);
+  }, [vaultMode]);
 
   useEffect(() => {
+    if (vaultMode === "loading") return;
     let cleanup: (() => void) | undefined;
+    let disposed = false;
     void appEvents.onTrayAction((action) => {
       if (action === "lock") {
         if (vaultModeRef.current === "ready") void lockVault();
@@ -223,10 +227,17 @@ function App() {
       if (action === "backup") setBackupOpen(true);
       if (action === "backupNow") void runConfiguredBackup();
     }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
       cleanup = unlisten;
     });
-    return () => cleanup?.();
-  }, []);
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [vaultMode]);
 
   useEffect(() => {
     if (vaultMode !== "ready") return;
@@ -275,7 +286,21 @@ function App() {
     } catch (error) {
       setVaultError(getErrorMessage(error));
       setVaultMode("unlock");
+    } finally {
+      signalFrontendReady();
+      void initializeAppInfo();
     }
+  }
+
+  function signalFrontendReady() {
+    if (!isTauriRuntime()) return;
+    // 让 VaultGate 先完成一次渲染/挂载，再通知后端显示窗口，
+    // 这样窗口出现时密码框已经可以立即接受输入。
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        void invoke("frontend_ready").catch(() => undefined);
+      });
+    });
   }
 
   async function initializeAppInfo() {

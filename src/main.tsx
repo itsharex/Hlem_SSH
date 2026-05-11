@@ -1,12 +1,10 @@
 import { Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
-import { invoke } from "@tauri-apps/api/core";
 import "antd/dist/reset.css";
 import "./styles.css";
-import { isTauriRuntime } from "./api/runtime";
+import App from "./App";
 
 const isEditorWindow = new URLSearchParams(window.location.search).has("editorWindow");
-const App = lazy(() => import("./App"));
 const EditorWindowApp = lazy(() =>
   import("./components/EditorWindowApp").then((module) => ({ default: module.EditorWindowApp })),
 );
@@ -24,15 +22,11 @@ function BootFallback() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <Suspense fallback={<BootFallback />}>
-    {isEditorWindow ? <EditorWindowApp /> : <App />}
-  </Suspense>,
+  isEditorWindow ? (
+    <Suspense fallback={<BootFallback />}>
+      <EditorWindowApp />
+    </Suspense>
+  ) : (
+    <App />
+  ),
 );
-
-if (!isEditorWindow && isTauriRuntime()) {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      void invoke("frontend_ready");
-    });
-  });
-}
