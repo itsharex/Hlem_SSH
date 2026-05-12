@@ -5,8 +5,12 @@ import "./styles.css";
 import App from "./App";
 
 const isEditorWindow = new URLSearchParams(window.location.search).has("editorWindow");
+const isLogWindow = new URLSearchParams(window.location.search).has("logWindow");
 const EditorWindowApp = lazy(() =>
   import("./components/EditorWindowApp").then((module) => ({ default: module.EditorWindowApp })),
+);
+const LogWindowApp = lazy(() =>
+  import("./components/LogWindowApp").then((module) => ({ default: module.LogWindowApp })),
 );
 
 function BootFallback() {
@@ -22,7 +26,11 @@ function BootFallback() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  isEditorWindow ? (
+  isLogWindow ? (
+    <Suspense fallback={<BootFallback />}>
+      <LogWindowApp />
+    </Suspense>
+  ) : isEditorWindow ? (
     <Suspense fallback={<BootFallback />}>
       <EditorWindowApp />
     </Suspense>

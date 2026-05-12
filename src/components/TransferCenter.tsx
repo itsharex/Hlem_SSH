@@ -184,8 +184,13 @@ function renderAllRecords(props: RenderAllRecordsProps) {
     unified.push({ type: "transfer", timestamp: new Date(record.createdAt).getTime() || 0, record });
   }
 
-  // Sort by time descending (newest first)
-  unified.sort((a, b) => b.timestamp - a.timestamp);
+  // Active transfers first, then sort by time descending
+  unified.sort((a, b) => {
+    const aActive = isActiveRecord(a);
+    const bActive = isActiveRecord(b);
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return b.timestamp - a.timestamp;
+  });
 
   return unified.map((item) => {
     switch (item.type) {
@@ -197,6 +202,17 @@ function renderAllRecords(props: RenderAllRecordsProps) {
         return renderTransferRecord(item.record, props);
     }
   });
+}
+
+function isActiveRecord(item: UnifiedRecord): boolean {
+  if (item.type === "transfer") {
+    const status = item.record.status;
+    return status === "queued" || status === "running" || status === "paused";
+  }
+  if (item.type === "save") {
+    return item.record.status === "saving";
+  }
+  return false;
 }
 
 function renderBackupRecord(record: BackupRecord, props: RenderAllRecordsProps) {

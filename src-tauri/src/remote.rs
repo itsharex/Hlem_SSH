@@ -40,6 +40,7 @@ use crate::{
 mod event_emitters;
 mod lifecycle;
 mod proxy;
+mod runtime_api;
 mod runtime_connection;
 mod runtime_forward;
 mod runtime_registry;
@@ -328,7 +329,7 @@ pub struct ForwardInfo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimeStatus {
     Connecting,

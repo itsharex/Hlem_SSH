@@ -8,6 +8,8 @@ interface SessionConfigModalProps {
   mode: "create" | "edit";
   initialValue: SessionInput;
   groups: SessionGroup[];
+  existingSessions: { id: string; name: string; host: string }[];
+  editingSessionId?: string;
   onCancel: () => void;
   onCancelButton?: () => void;
   onSubmit: (input: SessionInput) => Promise<void>;
@@ -35,6 +37,8 @@ export function SessionConfigModal({
   mode,
   initialValue,
   groups,
+  existingSessions,
+  editingSessionId,
   onCancel,
   onCancelButton,
   onSubmit,
@@ -71,8 +75,8 @@ export function SessionConfigModal({
       open={open}
       width={720}
       centered
-      transitionName="helm-modal-motion"
-      maskTransitionName="helm-mask-motion"
+      transitionName=""
+      maskTransitionName=""
       onCancel={onCancel}
       footer={[
         <Button key="cancel" aria-label="取消" onClick={onCancelButton ?? onCancel}>
@@ -91,6 +95,8 @@ export function SessionConfigModal({
           groups={groups}
           authMethod={authMethod ?? initialValue.auth.method}
           proxyMode={proxyMode ?? proxyModeFromInput(initialValue)}
+          existingSessions={existingSessions}
+          editingSessionId={editingSessionId}
         />
       </Form>
     </Modal>
@@ -102,15 +108,31 @@ function BaseFields({
   groups,
   authMethod,
   proxyMode,
+  existingSessions,
+  editingSessionId,
 }: {
   mode: "create" | "edit";
   groups: SessionGroup[];
   authMethod: "password" | "privateKey";
   proxyMode: "global" | "custom";
+  existingSessions: { id: string; name: string; host: string }[];
+  editingSessionId?: string;
 }) {
   return (
     <div className="sessionFormGrid">
-      <Form.Item label="连接名称" name="name">
+      <Form.Item
+        label="连接名称"
+        name="name"
+        rules={[{
+          validator: (_, value) => {
+            if (!value || !value.trim()) return Promise.resolve();
+            const duplicate = existingSessions.find(
+              (s) => s.name === value.trim() && s.id !== editingSessionId,
+            );
+            return duplicate ? Promise.reject("该名称已存在") : Promise.resolve();
+          },
+        }]}
+      >
         <Input placeholder="生产服务器" autoComplete="off" />
       </Form.Item>
       <Form.Item label="分组" name="groupId">
@@ -120,7 +142,24 @@ function BaseFields({
           options={groups.map((group) => ({ label: group.name, value: group.id }))}
         />
       </Form.Item>
-      <Form.Item label="主机地址" name="host" rules={[{ required: true, message: "请输入主机地址" }]}>
+      <Form.Item
+        label="主机地址"
+        name="host"
+        rules={[
+          { required: true, message: "请输入主机地址" },
+          {
+            validator: (_, value) => {
+              if (!value || !value.trim()) return Promise.resolve();
+              const duplicate = existingSessions.find(
+                (s) => s.host === value.trim() && s.id !== editingSessionId,
+              );
+              return duplicate
+                ? Promise.reject(`该主机已存在（${duplicate.name}）`)
+                : Promise.resolve();
+            },
+          },
+        ]}
+      >
         <Input placeholder="192.168.1.10" autoComplete="off" />
       </Form.Item>
       <Form.Item label="端口" name="port" rules={[{ required: true, message: "请输入端口" }]}>

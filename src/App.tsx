@@ -99,6 +99,7 @@ function App() {
   const [backupBusy, setBackupBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tunnelOpen, setTunnelOpen] = useState(false);
+  const [apiServerRunning, setApiServerRunning] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -1531,6 +1532,10 @@ function App() {
                   transfers={transfers}
                   sessionListOpen={sessionListOpen}
                   onSessionListOpenChange={setSessionListOpen}
+                  apiServerRunning={apiServerRunning}
+                  onApiServerStop={() => {
+                    void appApi.apiServerStop().then(() => setApiServerRunning(false));
+                  }}
                 />
                 {activeSession ? (
                   <main className="workspace">
@@ -1597,7 +1602,12 @@ function App() {
               sessions={sessions}
               transferSessionIds={transferSessionIds}
               saveRecords={fileSaveRecords}
-              backupRecords={configSnapshot?.data.backupRecords ?? []}
+              backupRecords={(() => {
+                const records = configSnapshot?.data.backupRecords ?? [];
+                if (records.length === 0) return [];
+                const sorted = [...records].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                return sorted.slice(0, 1);
+              })()}
               canUpload={Boolean(activeSession?.sftpId)}
               onClose={() => setTransferCenterOpen(false)}
               onPause={(id) => void pauseTransfer(id)}
@@ -1636,10 +1646,12 @@ function App() {
             <SettingsModal
               open={settingsOpen}
               initialValue={configSnapshot.data.settings ?? { proxy: null, backup: defaultBackupSettings(), quickCommands: [] }}
+              sessions={sessions}
               onClose={() => setSettingsOpen(false)}
               onSubmit={saveSettings}
               onBackupOpen={() => setBackupOpen(true)}
               onTunnelOpen={() => setTunnelOpen(true)}
+              onApiServerChange={setApiServerRunning}
               appInfo={appInfo}
               updateInfo={updateInfo}
               updateError={updateError}
@@ -1676,6 +1688,8 @@ function App() {
               mode={sessionModal.mode}
               initialValue={sessionModal.input}
               groups={configSnapshot.data.groups}
+              existingSessions={configSnapshot.data.sessions.map((s) => ({ id: s.id, name: s.name, host: s.host }))}
+              editingSessionId={sessionModal.mode === "edit" ? sessionModal.sessionId : undefined}
               onCancel={closeSessionConfigModal}
               onCancelButton={returnToSessionListOnCancel ? backToSessionListFromConfig : undefined}
               onSubmit={saveSessionConfig}

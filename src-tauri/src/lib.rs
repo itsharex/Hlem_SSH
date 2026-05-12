@@ -1,3 +1,4 @@
+mod api_server;
 mod backup;
 mod commands;
 mod config;
@@ -8,19 +9,21 @@ mod remote;
 mod vault;
 
 use commands::{
-    app_info, backup_record_delete, backup_record_restore, backup_records_clear, backup_run_now,
-    config_snapshot, download_update, fetch_text_url, forward_list, forward_start_dynamic,
-    forward_start_local, forward_start_remote, forward_stop, group_create, group_delete,
-    group_update, install_update, local_expand_paths, open_database_dir, open_external_url,
-    open_path_dir, resolve_vault_path, session_create, session_delete, session_duplicate,
-    session_update, settings_update, sftp_copy, sftp_create_file, sftp_delete, sftp_list,
-    sftp_mkdir, sftp_open, sftp_read_text, sftp_rename, sftp_search, sftp_write_text,
-    ssh_connect, ssh_disconnect, ssh_exec, ssh_exec_on_connection, ssh_trust_host_key,
-    telemetry_snapshot, telemetry_start, telemetry_stop, terminal_close, terminal_open,
-    terminal_resize, terminal_write, transfer_cancel, transfer_download, transfer_pause,
-    transfer_remove, transfer_resume, transfer_retry, transfer_upload, tunnel_create,
-    tunnel_delete, tunnel_list, tunnel_update, vault_backup_export, vault_backup_import,
-    vault_change_master_password, vault_create, vault_lock, vault_status, vault_unlock, AppState,
+    api_server_regenerate_key, api_server_start, api_server_status, api_server_stop,
+    api_server_logs, app_info, backup_record_delete,
+    backup_record_restore, backup_records_clear, backup_run_now, config_snapshot, download_update,
+    fetch_text_url, forward_list, forward_start_dynamic, forward_start_local,
+    forward_start_remote, forward_stop, group_create, group_delete, group_update, install_update,
+    local_expand_paths, open_database_dir, open_external_url, open_path_dir, resolve_vault_path,
+    session_create, session_delete, session_duplicate, session_update, settings_update, sftp_copy,
+    sftp_create_file, sftp_delete, sftp_list, sftp_mkdir, sftp_open, sftp_read_text, sftp_rename,
+    sftp_search, sftp_write_text, ssh_connect, ssh_disconnect, ssh_exec, ssh_exec_on_connection,
+    ssh_trust_host_key, telemetry_snapshot, telemetry_start, telemetry_stop, terminal_close,
+    terminal_open, terminal_resize, terminal_write, transfer_cancel, transfer_download,
+    transfer_pause, transfer_remove, transfer_resume, transfer_retry, transfer_upload,
+    tunnel_create, tunnel_delete, tunnel_list, tunnel_update, vault_backup_export,
+    vault_backup_import, vault_change_master_password, vault_create, vault_lock, vault_status,
+    vault_unlock, AppState,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -123,7 +126,12 @@ pub fn run() {
             forward_start_remote,
             forward_start_dynamic,
             forward_stop,
-            forward_list
+            forward_list,
+            api_server_start,
+            api_server_stop,
+            api_server_status,
+            api_server_regenerate_key,
+            api_server_logs
         ])
         .run(tauri::generate_context!())
         .expect("failed to run HelM");

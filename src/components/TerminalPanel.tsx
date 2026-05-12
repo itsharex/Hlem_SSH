@@ -2,11 +2,13 @@ import { ClearOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined } from
 import { Button, Dropdown, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { remoteApi } from "../api/remoteApi";
+import { appApi } from "../api/appApi";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import type { RemoteSession, TerminalEntry, TerminalOutputEvent } from "../types";
 
@@ -141,6 +143,9 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon((_event, url) => {
+      void appApi.openExternalUrl(url);
+    }));
     terminal.open(host);
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;

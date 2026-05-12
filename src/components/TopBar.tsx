@@ -33,6 +33,8 @@ interface TopBarProps {
   transfers: TransferInfo[];
   sessionListOpen: boolean;
   onSessionListOpenChange: (open: boolean) => void;
+  apiServerRunning: boolean;
+  onApiServerStop: () => void;
 }
 
 export function TopBar({
@@ -52,6 +54,8 @@ export function TopBar({
   transfers,
   sessionListOpen,
   onSessionListOpenChange,
+  apiServerRunning,
+  onApiServerStop,
 }: TopBarProps) {
   const [sessionListPage, setSessionListPage] = useState(1);
 
@@ -75,7 +79,6 @@ export function TopBar({
   }, [sessions, sessionListPage]);
 
   function openCreateSession() {
-    onSessionListOpenChange(false);
     onAdd();
   }
 
@@ -94,6 +97,14 @@ export function TopBar({
           <span>HelM</span>
         </span>
         <span className="brandActions">
+          {apiServerRunning && (
+            <Tooltip title="点击关闭 AI API" placement="bottom">
+              <span className="brandApiIndicator" role="button" onClick={onApiServerStop}>
+                <span className="brandApiDot" />
+                <span className="brandApiText">API</span>
+              </span>
+            </Tooltip>
+          )}
           <Tooltip title="设置" placement="bottom">
             <Button
               aria-label="设置"
@@ -258,7 +269,6 @@ export function TopBar({
                       size="small"
                       onClick={(event) => {
                         event.stopPropagation();
-                        onSessionListOpenChange(false);
                         onEdit(session.id);
                       }}
                     />

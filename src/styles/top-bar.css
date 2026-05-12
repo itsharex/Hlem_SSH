@@ -121,6 +121,55 @@
   flex: 0 0 auto;
 }
 
+.brandApiIndicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, .12) 0%, rgba(5, 150, 105, .08) 100%);
+  border: 1px solid rgba(16, 185, 129, .25);
+  cursor: pointer;
+  user-select: none;
+  transition: background .2s, border-color .2s;
+}
+
+.brandApiIndicator:hover {
+  background: linear-gradient(135deg, rgba(239, 68, 68, .1) 0%, rgba(220, 38, 38, .08) 100%);
+  border-color: rgba(239, 68, 68, .3);
+}
+
+.brandApiIndicator:hover .brandApiDot {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, .5);
+  animation: none;
+}
+
+.brandApiIndicator:hover .brandApiText {
+  color: #dc2626;
+}
+
+.brandApiDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, .5);
+  animation: brandApiPulse 2s ease-in-out infinite;
+}
+
+.brandApiText {
+  font-size: 10px;
+  font-weight: 700;
+  color: #059669;
+  letter-spacing: .5px;
+}
+
+@keyframes brandApiPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
 .sessionTabs {
   min-width: 0;
   height: 56px;

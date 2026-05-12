@@ -1,16 +1,20 @@
-import { ApartmentOutlined, AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, EyeInvisibleOutlined, FolderOpenOutlined, InfoCircleOutlined, LinkOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, Typography } from "antd";
+import { ApartmentOutlined, ApiOutlined, AppleOutlined, CheckCircleOutlined, CheckOutlined, CloudDownloadOutlined, CopyOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, ExportOutlined, EyeInvisibleOutlined, FolderOpenOutlined, FundProjectionScreenOutlined, InfoCircleOutlined, LinkOutlined, ReloadOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, Typography, message } from "antd";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import type { AppInfo, AppSettings, UpdateInfo } from "../types";
+import { appApi, type ApiServerInfo, type ApiLogEntry } from "../api/appApi";
+import { vaultApi } from "../api/vaultApi";
 
 interface SettingsModalProps {
   open: boolean;
   initialValue: AppSettings;
+  sessions: { id: string; name: string; host: string; state: string }[];
   onClose: () => void;
   onSubmit: (settings: AppSettings) => Promise<void>;
   onBackupOpen: () => void;
   onTunnelOpen: () => void;
+  onApiServerChange: (running: boolean) => void;
   appInfo: AppInfo | null;
   updateInfo: UpdateInfo | null;
   updateError: string | null;
@@ -37,10 +41,12 @@ interface SettingsFormValues {
 export function SettingsModal({
   open,
   initialValue,
+  sessions,
   onClose,
   onSubmit,
   onBackupOpen,
   onTunnelOpen,
+  onApiServerChange,
   appInfo,
   updateInfo,
   updateError,
@@ -59,6 +65,13 @@ export function SettingsModal({
   const [form] = Form.useForm<SettingsFormValues>();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [aiApiOpen, setAiApiOpen] = useState(false);
+  const [aiApiInfo, setAiApiInfo] = useState<ApiServerInfo | null>(null);
+  const [aiApiLoading, setAiApiLoading] = useState(false);
+  const [aiApiPort, setAiApiPort] = useState(19880);
+  const [aiApiCopied, setAiApiCopied] = useState(false);
+  const [aiApiSessionId, setAiApiSessionId] = useState<string | null>(initialValue.aiApiSessionId ?? null);
+  const [aiApiLogs, setAiApiLogs] = useState<ApiLogEntry[]>([]);
   const enabled = Form.useWatch("enabled", form);
 
   useEffect(() => {
@@ -69,7 +82,16 @@ export function SettingsModal({
       host: initialValue.proxy?.host ?? "127.0.0.1",
       port: initialValue.proxy?.port ?? 1080,
     });
+    setAiApiSessionId(initialValue.aiApiSessionId ?? null);
   }, [form, initialValue, open]);
+
+  useEffect(() => {
+    if (!aiApiOpen || !aiApiInfo?.running) return;
+    const poll = () => void appApi.apiServerLogs().then(setAiApiLogs).catch(() => undefined);
+    poll();
+    const timer = setInterval(poll, 500);
+    return () => clearInterval(timer);
+  }, [aiApiOpen, aiApiInfo?.running]);
 
   async function submit() {
     const values = await form.validateFields();
@@ -83,6 +105,187 @@ export function SettingsModal({
             port: values.port,
           }
         : null,
+    });
+  }
+
+  async function refreshAiApiStatus() {
+    try {
+      const info = await appApi.apiServerStatus();
+      setAiApiInfo(info);
+      onApiServerChange(info.running);
+      if (info.running && info.port) setAiApiPort(info.port);
+    } catch {
+      setAiApiInfo(null);
+    }
+  }
+
+  async function startAiApi() {
+    setAiApiLoading(true);
+    try {
+      const info = await appApi.apiServerStart(aiApiPort, aiApiSessionId);
+      setAiApiInfo(info);
+      onApiServerChange(true);
+    } catch (error) {
+      Modal.error({ title: "启动 API 服务失败", content: String(error) });
+    } finally {
+      setAiApiLoading(false);
+    }
+  }
+
+  async function stopAiApi() {
+    setAiApiLoading(true);
+    try {
+      await appApi.apiServerStop();
+      setAiApiInfo({ running: false, port: 0, apiKey: "" });
+      onApiServerChange(false);
+    } catch (error) {
+      Modal.error({ title: "停止 API 服务失败", content: String(error) });
+    } finally {
+      setAiApiLoading(false);
+    }
+  }
+
+  async function regenerateKey() {
+    try {
+      const info = await appApi.apiServerRegenerateKey();
+      setAiApiInfo(info);
+      message.success("API Key 已重新生成");
+    } catch (error) {
+      Modal.error({ title: "重新生成密钥失败", content: String(error) });
+    }
+  }
+
+  async function changeAiApiSession(sessionId: string | null) {
+    setAiApiSessionId(sessionId);
+    // Persist silently without triggering parent state update
+    try {
+      await vaultApi.settingsUpdate({ ...initialValue, aiApiSessionId: sessionId });
+      const sessionName = sessions.find((s) => s.id === sessionId)?.name;
+      message.success(sessionId ? `已切换至「${sessionName}」` : "已清除会话限制");
+    } catch {
+      message.error("保存失败");
+    }
+    // If server is running, restart with new session filter
+    if (aiApiInfo?.running) {
+      try {
+        await appApi.apiServerStop();
+        const info = await appApi.apiServerStart(aiApiPort, sessionId);
+        setAiApiInfo(info);
+      } catch (error) {
+        Modal.error({ title: "重启 API 服务失败", content: String(error) });
+      }
+    }
+  }
+
+  async function openLogWindow() {
+    try {
+      const { isTauriRuntime } = await import("../api/runtime");
+      if (isTauriRuntime()) {
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const existing = await WebviewWindow.getByLabel("api-logs");
+        if (existing) {
+          await existing.setFocus();
+          return;
+        }
+        const webview = new WebviewWindow("api-logs", {
+          url: "index.html?logWindow=1",
+          title: "AI API 操作日志",
+          width: 680,
+          height: 480,
+          minWidth: 480,
+          minHeight: 320,
+          resizable: true,
+        });
+        await webview.once("tauri://error", (event) => {
+          message.error(String(event.payload));
+        });
+      } else {
+        window.open(
+          `${window.location.origin}${window.location.pathname}?logWindow=1`,
+          "api-logs",
+          "width=680,height=480",
+        );
+      }
+    } catch (error) {
+      message.error(String(error));
+    }
+  }
+
+  function copyApiInfo() {
+    if (!aiApiInfo?.running) return;
+    const selectedSession = aiApiSessionId ? sessions.find((s) => s.id === aiApiSessionId) : null;
+    const sessionNote = selectedSession
+      ? `- 指定会话: ${selectedSession.name} (${selectedSession.host})\n- Session ID: ${selectedSession.id}`
+      : "- 模式: 全部会话（需先调用 GET /api/sessions 获取 sessionId）";
+    const sid = selectedSession ? selectedSession.id : "<sessionId>";
+    const text = [
+      "# HelM 远程服务器操作指南",
+      "",
+      "你可以通过以下 API 操作我的远程服务器。所有请求必须携带认证头。",
+      "",
+      "## 连接信息",
+      `- Base URL: http://127.0.0.1:${aiApiInfo.port}`,
+      `- API Key: ${aiApiInfo.apiKey}`,
+      `- 认证头: Authorization: Bearer ${aiApiInfo.apiKey}`,
+      sessionNote,
+      "",
+      "## 可用操作",
+      "",
+      ...(selectedSession ? [] : [
+        "### 1. 查看已连接的服务器",
+        "```",
+        `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" http://127.0.0.1:${aiApiInfo.port}/api/sessions`,
+        "```",
+        "返回: [{sessionId, name, host, connected, sftpAvailable}]",
+        "",
+      ]),
+      `### ${selectedSession ? "1" : "2"}. 执行命令`,
+      "```",
+      `curl -X POST http://127.0.0.1:${aiApiInfo.port}/api/exec \\`,
+      `  -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '{"sessionId":"${sid}","command":"ls -la","timeoutMs":30000}'`,
+      "```",
+      "返回: {exitCode, stdout, stderr}",
+      "",
+      `### ${selectedSession ? "2" : "3"}. 上传文件`,
+      "```",
+      `curl -X POST http://127.0.0.1:${aiApiInfo.port}/api/upload \\`,
+      `  -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
+      `  -F "sessionId=${sid}" \\`,
+      `  -F "remotePath=/home/user/file.txt" \\`,
+      `  -F "file=@local_file.txt"`,
+      "```",
+      "返回: {success, remotePath, size}",
+      "",
+      `### ${selectedSession ? "3" : "4"}. 浏览远程目录`,
+      "```",
+      `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
+      `  "http://127.0.0.1:${aiApiInfo.port}/api/files?sessionId=${sid}&path=/home"`,
+      "```",
+      "返回: [{name, path, fileType, size}]",
+      "",
+      `### ${selectedSession ? "4" : "5"}. 下载文件`,
+      "```",
+      `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
+      `  "http://127.0.0.1:${aiApiInfo.port}/api/download?sessionId=${sid}&path=/home/user/file.txt" -o file.txt`,
+      "```",
+      "",
+      "## 使用流程",
+      ...(selectedSession ? [
+        `1. 直接使用 sessionId: ${selectedSession.id}`,
+        "2. 所有路径使用绝对路径（如 /home/user/...）",
+      ] : [
+        "1. 先调用 GET /api/sessions 获取可用的 sessionId",
+        "2. 用获取到的 sessionId 执行命令、上传文件或浏览目录",
+        "3. 所有路径使用绝对路径（如 /home/user/...）",
+        "4. 每个请求必须指定 sessionId，因为可能同时连接多台服务器",
+      ]),
+    ].join("\n");
+    void navigator.clipboard.writeText(text).then(() => {
+      setAiApiCopied(true);
+      setTimeout(() => setAiApiCopied(false), 2000);
+      message.success("已复制 API 使用说明");
     });
   }
 
@@ -129,6 +332,9 @@ export function SettingsModal({
             </Button>
             <Button block icon={<ApartmentOutlined />} onClick={onTunnelOpen}>
               SSH 隧道管理
+            </Button>
+            <Button block icon={<ApiOutlined />} onClick={() => { setAiApiOpen(true); void refreshAiApiStatus(); }}>
+              AI 接入
             </Button>
             <Button block icon={<InfoCircleOutlined />} onClick={() => setAboutOpen(true)}>
               关于版本
@@ -401,6 +607,114 @@ export function SettingsModal({
               关闭
             </Button>
           )}
+        </div>
+      </Modal>
+      <Modal
+        open={aiApiOpen}
+        title="AI 接入"
+        className="aiApiModal"
+        footer={null}
+        onCancel={() => setAiApiOpen(false)}
+        destroyOnHidden
+        width={480}
+      >
+        <div className="aiApiContent">
+          <p className="aiApiDescription">
+            启用后将在本地启动一个 HTTP API 服务，AI 可通过 API Key 认证后执行命令、上传文件、浏览目录等操作。服务仅监听 127.0.0.1，关闭后外部无法连接。
+          </p>
+          <div className="aiApiStatusRow">
+            <span className="aiApiStatusLabel">服务状态</span>
+            <span className={`aiApiStatusBadge aiApiStatusBadge-${aiApiInfo?.running ? "running" : "stopped"}`}>
+              {aiApiInfo?.running ? "运行中" : "已停止"}
+            </span>
+            {aiApiInfo?.running && aiApiLogs.length > 0 && (
+              <Tooltip title="查看日志">
+                <Button size="small" type="link" icon={<FundProjectionScreenOutlined />} onClick={() => void openLogWindow()} />
+              </Tooltip>
+            )}
+          </div>
+          <div className="aiApiFormRow">
+            <span className="aiApiFormLabel">监听端口</span>
+            <InputNumber
+              min={1024}
+              max={65535}
+              precision={0}
+              value={aiApiPort}
+              disabled={aiApiInfo?.running}
+              onChange={(value) => value && setAiApiPort(value)}
+              style={{ width: 120 }}
+            />
+          </div>
+          {aiApiInfo?.running && aiApiInfo.apiKey && (
+            <>
+              <div className="aiApiFormRow">
+                <span className="aiApiFormLabel">API 地址</span>
+                <Input
+                  readOnly
+                  value={`http://127.0.0.1:${aiApiInfo.port}`}
+                  style={{ flex: 1 }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+              </div>
+              <div className="aiApiFormRow">
+                <span className="aiApiFormLabel">API Key</span>
+                <Input.Password
+                  readOnly
+                  value={aiApiInfo.apiKey}
+                  style={{ flex: 1 }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <Tooltip title="重新生成密钥">
+                  <Button
+                    icon={<ReloadOutlined />}
+                    size="small"
+                    onClick={() => void regenerateKey()}
+                  />
+                </Tooltip>
+              </div>
+              <div className="aiApiFormRow">
+                <span className="aiApiFormLabel">指定会话</span>
+                <Select
+                  style={{ flex: 1 }}
+                  placeholder="全部会话（AI 可访问所有已连接终端）"
+                  allowClear
+                  value={aiApiSessionId}
+                  onChange={(value) => void changeAiApiSession(value ?? null)}
+                  options={sessions.map((s) => ({ label: s.name, value: s.id }))}
+                />
+              </div>
+              <div className="aiApiEndpoints">
+                <div className="aiApiEndpointHeader">
+                  <div className="aiApiEndpointTitle">可用接口</div>
+                  <Tooltip title={aiApiCopied ? "已复制" : "复制 API 使用说明"}>
+                    <Button
+                      icon={aiApiCopied ? <CheckOutlined style={{ color: "#10b981" }} /> : <CopyOutlined />}
+                      size="small"
+                      type="text"
+                      onClick={copyApiInfo}
+                    />
+                  </Tooltip>
+                </div>
+                <div className="aiApiEndpointItem"><code>GET /api/sessions</code> — 列出已连接会话</div>
+                <div className="aiApiEndpointItem"><code>POST /api/exec</code> — 执行命令</div>
+                <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
+                <div className="aiApiEndpointItem"><code>GET /api/files</code> — 浏览目录</div>
+                <div className="aiApiEndpointItem"><code>GET /api/download</code> — 下载文件</div>
+                <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
+              </div>
+            </>
+          )}
+          <div className="aiApiActions">
+            {aiApiInfo?.running ? (
+              <Button danger loading={aiApiLoading} onClick={() => void stopAiApi()}>
+                停止服务
+              </Button>
+            ) : (
+              <Button type="primary" loading={aiApiLoading} disabled={!aiApiSessionId} onClick={() => void startAiApi()}>
+                启动服务
+              </Button>
+            )}
+          </div>
         </div>
       </Modal>
     </Modal>

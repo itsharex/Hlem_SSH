@@ -7,6 +7,20 @@ export type LocalExpandedEntry = {
   relativePath: string;
 };
 
+export type ApiServerInfo = {
+  running: boolean;
+  port: number;
+  apiKey: string;
+};
+
+export type ApiLogEntry = {
+  timestamp: string;
+  action: string;
+  detail: string;
+  success: boolean;
+  durationMs: number;
+};
+
 type GitHubRelease = {
   tag_name?: string;
   name?: string;
@@ -59,6 +73,16 @@ export const appApi = {
   openExternalUrl: (url: string) => call<void>("open_external_url", () => browserOpenUrl(url), { url }),
   expandLocalPaths: (paths: string[]) =>
     call<LocalExpandedEntry[]>("local_expand_paths", () => browserUnavailable("本地目录展开"), { paths }),
+  apiServerStart: (port: number, allowedSessionId?: string | null) =>
+    call<ApiServerInfo>("api_server_start", () => browserUnavailable("API 服务"), { port, allowedSessionId: allowedSessionId ?? null }),
+  apiServerStop: () =>
+    call<void>("api_server_stop", () => browserUnavailable("API 服务"), undefined),
+  apiServerStatus: () =>
+    call<ApiServerInfo>("api_server_status", () => ({ running: false, port: 0, apiKey: "" }), undefined),
+  apiServerRegenerateKey: () =>
+    call<ApiServerInfo>("api_server_regenerate_key", () => browserUnavailable("API 服务"), undefined),
+  apiServerLogs: () =>
+    call<ApiLogEntry[]>("api_server_logs", () => [], undefined),
 };
 
 async function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: Record<string, unknown>): Promise<T> {

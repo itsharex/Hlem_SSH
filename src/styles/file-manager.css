@@ -1334,3 +1334,44 @@ body.isResizingColumn .ant-table-cell {
   color: var(--accent) !important;
 }
 
+
+/* ─── File column name header with path hint ────────────────────────────── */
+.fileColumnNameHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fileColumnPathHint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #e85d04;
+  opacity: 1;
+}
+
+.fileColumnPathHint::before {
+  content: "·";
+  color: #94a3b8;
+  margin-right: 4px;
+}
+
+.fileTableSurface .ant-table-column-sorters::after {
+  display: none;
+}
+
+.fileTableSurface .ant-table-measure-row {
+  visibility: hidden;
+  height: 0 !important;
+  line-height: 0;
+  font-size: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+
+.fileTableSurface .ant-table-measure-row td {
+  padding: 0 !important;
+  border: none !important;
+  height: 0 !important;
+  line-height: 0 !important;
+}

@@ -99,6 +99,8 @@ export interface AppSettings {
   quickCommands?: QuickCommand[];
   terminalInputHistory?: TerminalInputHistoryEntry[];
   ignoredUpdateVersions?: string[];
+  aiApiKey?: string | null;
+  aiApiSessionId?: string | null;
 }
 
 export interface TerminalInputHistoryEntry {

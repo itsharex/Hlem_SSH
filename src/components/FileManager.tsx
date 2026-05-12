@@ -266,7 +266,7 @@ export function FileManager({
     () =>
       baseColumns.map((column) => {
         const key = column.key as string;
-        return {
+        const col = {
           ...column,
           width: columnWidths[key] ?? DEFAULT_COLUMN_WIDTHS[key],
           onHeaderCell: () => ({
@@ -274,8 +274,18 @@ export function FileManager({
             onStartResize: handleColumnResizeStart,
           } as React.ThHTMLAttributes<HTMLTableCellElement>),
         };
+        if (key === "name") {
+          const dirName = path === "/" ? "/" : path.split("/").filter(Boolean).pop() || "/";
+          col.title = (
+            <span className="fileColumnNameHeader">
+              文件名
+              <span className="fileColumnPathHint">{dirName}</span>
+            </span>
+          );
+        }
+        return col;
       }),
-    [columnWidths, handleColumnResizeStart],
+    [columnWidths, handleColumnResizeStart, path],
   );
 
   const tableScrollX = useMemo(
@@ -861,7 +871,7 @@ export function FileManager({
                 },
                 style: { cursor: entry.fileType === "directory" ? "pointer" : "default" },
               })}
-              scroll={{ x: files.length > 0 ? tableScrollX : undefined, y: tableScrollY }}
+              scroll={{ x: files.length > 0 ? tableScrollX : undefined, y: files.length > 0 ? tableScrollY : undefined }}
               locale={{ emptyText: canUseFiles ? (searchText ? "无匹配文件" : "目录为空") : "SFTP 可用后显示文件" }}
             />
             <Dropdown

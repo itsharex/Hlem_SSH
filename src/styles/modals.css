@@ -2191,3 +2191,333 @@
   box-shadow: 0 4px 10px -3px rgba(239, 68, 68, .2) !important;
 }
 
+
+/* ─── AI API Modal ──────────────────────────────────────────────────────── */
+.aiApiContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.aiApiDescription {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .06) 0%, rgba(139, 92, 246, .06) 100%);
+  border: 1px solid rgba(99, 102, 241, .12);
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.aiApiStatusRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aiApiStatusLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+}
+
+.aiApiStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+
+.aiApiStatusBadge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  animation: aiApiBlink 1.5s ease-in-out infinite;
+}
+
+@keyframes aiApiBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+.aiApiStatusBadge-running {
+  background: linear-gradient(135deg, rgba(16, 185, 129, .12) 0%, rgba(5, 150, 105, .08) 100%);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, .25);
+}
+
+.aiApiStatusBadge-running::before {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, .5);
+}
+
+.aiApiStatusBadge-stopped {
+  background: rgba(100, 116, 139, .08);
+  color: #64748b;
+  border: 1px solid rgba(100, 116, 139, .15);
+}
+
+.aiApiStatusBadge-stopped::before {
+  background: #94a3b8;
+  animation: none;
+}
+
+.aiApiFormRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aiApiFormLabel {
+  flex-shrink: 0;
+  width: 64px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+}
+
+.aiApiEndpoints {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #e2e8f0;
+  position: relative;
+}
+
+.aiApiEndpointTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 8px;
+}
+
+.aiApiEndpointHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.aiApiEndpointHeader .aiApiEndpointTitle {
+  margin-bottom: 0;
+}
+
+.aiApiEndpointItem {
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aiApiEndpointItem code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+  color: #4338ca;
+  font-weight: 500;
+  border: 1px solid rgba(99, 102, 241, .15);
+  white-space: nowrap;
+}
+
+.aiApiEndpointNote {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed #e2e8f0;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.aiApiEndpointNote code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.aiApiActions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+/* ─── AI API Logs ───────────────────────────────────────────────────────── */
+.aiApiLogs {
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+}
+
+.aiApiLogsTitle {
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.aiApiLogsList {
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .3) transparent;
+}
+
+.aiApiLogItem {
+  display: grid;
+  grid-template-columns: 56px 52px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.aiApiLogItem:last-child {
+  border-bottom: none;
+}
+
+.aiApiLogItem-err {
+  background: rgba(239, 68, 68, .03);
+}
+
+.aiApiLogTime {
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+}
+
+.aiApiLogAction {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.aiApiLogAction-exec { background: #dbeafe; color: #1d4ed8; }
+.aiApiLogAction-upload { background: #dcfce7; color: #166534; }
+.aiApiLogAction-files { background: #fef3c7; color: #92400e; }
+.aiApiLogAction-download { background: #e0e7ff; color: #3730a3; }
+
+.aiApiLogDetail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #334155;
+}
+
+.aiApiLogItem-err .aiApiLogDetail {
+  color: #dc2626;
+}
+
+.aiApiLogDuration {
+  text-align: right;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+}
+
+
+/* ─── Detached Log Window ───────────────────────────────────────────────── */
+.logWindow {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.logWindowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.logWindowTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: -.2px;
+}
+
+.logWindowHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logWindowCount {
+  font-size: 12px;
+  color: #64748b;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
+.logWindowBody {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .3) transparent;
+}
+
+.logWindowBody::-webkit-scrollbar {
+  width: 6px;
+}
+
+.logWindowBody::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, .3);
+  border-radius: 3px;
+}
+
+.logWindowBody::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, .5);
+}
+
+.logWindowEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+}
+
+.logWindowList {
+  padding: 4px 0;
+}
+
+.logWindowList .aiApiLogItem {
+  padding: 8px 20px;
+}
+
+.logWindowList .aiApiLogItem:hover {
+  background: rgba(99, 102, 241, .03);
+}
+
+.logWindowList .aiApiLogItem-err:hover {
+  background: rgba(239, 68, 68, .05);
+}

@@ -120,6 +120,10 @@ pub struct AppSettings {
     pub terminal_input_history: Vec<TerminalInputHistoryEntry>,
     #[serde(default)]
     pub ignored_update_versions: Vec<String>,
+    #[serde(default)]
+    pub ai_api_key: Option<String>,
+    #[serde(default)]
+    pub ai_api_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
