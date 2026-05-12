@@ -79,6 +79,76 @@ pub fn app_info(app: AppHandle) -> AppResult<AppInfo> {
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalExpandedEntry {
+    /// The absolute local path of the file.
+    pub local_path: String,
+    /// The relative path from the root entry (preserves directory structure).
+    pub relative_path: String,
+}
+
+/// Expand local paths: if a path is a directory, recursively list all files inside it
+/// with their relative paths preserved. If a path is a file, return it as-is.
+#[tauri::command]
+pub async fn local_expand_paths(paths: Vec<String>) -> AppResult<Vec<LocalExpandedEntry>> {
+    let mut results = Vec::new();
+    for root in paths {
+        let root_path = PathBuf::from(&root);
+        let metadata = tokio::fs::metadata(&root_path)
+            .await
+            .map_err(|error| AppError::Io(format!("无法读取路径 {root}: {error}")))?;
+        if metadata.is_file() {
+            let file_name = root_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            results.push(LocalExpandedEntry {
+                local_path: root.clone(),
+                relative_path: file_name,
+            });
+        } else if metadata.is_dir() {
+            let root_name = root_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let mut stack = vec![(root_path.clone(), root_name.clone())];
+            while let Some((dir, prefix)) = stack.pop() {
+                let mut entries = tokio::fs::read_dir(&dir)
+                    .await
+                    .map_err(|error| AppError::Io(format!("无法读取目录 {}: {error}", dir.display())))?;
+                while let Some(entry) = entries
+                    .next_entry()
+                    .await
+                    .map_err(|error| AppError::Io(format!("读取目录条目失败: {error}")))?
+                {
+                    let entry_path = entry.path();
+                    let entry_name = entry
+                        .file_name()
+                        .to_string_lossy()
+                        .to_string();
+                    let relative = format!("{}/{}", prefix, entry_name);
+                    let ft = entry
+                        .file_type()
+                        .await
+                        .map_err(|error| AppError::Io(format!("读取文件类型失败: {error}")))?;
+                    if ft.is_file() {
+                        results.push(LocalExpandedEntry {
+                            local_path: entry_path.to_string_lossy().to_string(),
+                            relative_path: relative,
+                        });
+                    } else if ft.is_dir() {
+                        stack.push((entry_path, relative));
+                    }
+                }
+            }
+        }
+    }
+    Ok(results)
+}
+
 #[tauri::command]
 pub async fn fetch_text_url(url: String) -> AppResult<String> {
     let trimmed = validate_http_url(&url)?;

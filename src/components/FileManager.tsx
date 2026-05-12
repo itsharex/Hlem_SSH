@@ -861,7 +861,7 @@ export function FileManager({
                 },
                 style: { cursor: entry.fileType === "directory" ? "pointer" : "default" },
               })}
-              scroll={{ x: tableScrollX, y: tableScrollY }}
+              scroll={{ x: files.length > 0 ? tableScrollX : undefined, y: tableScrollY }}
               locale={{ emptyText: canUseFiles ? (searchText ? "无匹配文件" : "目录为空") : "SFTP 可用后显示文件" }}
             />
             <Dropdown

@@ -2,6 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo, UpdateInfo } from "../types";
 import { isTauriRuntime } from "./runtime";
 
+export type LocalExpandedEntry = {
+  localPath: string;
+  relativePath: string;
+};
+
 type GitHubRelease = {
   tag_name?: string;
   name?: string;
@@ -52,6 +57,8 @@ export const appApi = {
   openDatabaseDir: () => call<void>("open_database_dir", () => undefined),
   openPathDir: (path: string) => call<void>("open_path_dir", () => undefined, { path }),
   openExternalUrl: (url: string) => call<void>("open_external_url", () => browserOpenUrl(url), { url }),
+  expandLocalPaths: (paths: string[]) =>
+    call<LocalExpandedEntry[]>("local_expand_paths", () => browserUnavailable("本地目录展开"), { paths }),
 };
 
 async function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: Record<string, unknown>): Promise<T> {

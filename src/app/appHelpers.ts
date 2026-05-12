@@ -50,12 +50,12 @@ export function shouldSkipTerminalEntry(entries: TerminalEntry[], entry: Termina
   return Boolean(last && last.kind === entry.kind && last.content === entry.content);
 }
 
-export async function runUploadQueue<T>(
-  items: string[],
+export async function runUploadQueue<TItem, TResult>(
+  items: TItem[],
   concurrency: number,
-  worker: (item: string) => Promise<T>,
-): Promise<T[]> {
-  const results: T[] = [];
+  worker: (item: TItem) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results: TResult[] = [];
   let cursor = 0;
   const workerCount = Math.max(1, Math.min(12, concurrency, items.length));
   await Promise.all(

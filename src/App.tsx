@@ -818,12 +818,12 @@ function App() {
   }
 
   async function removeTransfer(transferId: string) {
+    // 乐观更新：先立即从前端列表移除，避免后端写锁竞争导致 UI 卡住。
+    setPersistedTransfers((current) => current.filter((transfer) => transfer.transferId !== transferId));
     try {
       await remoteApi.removeTransfer(transferId);
     } catch {
-      // 本地删除不应被后端清理失败阻断。
-    } finally {
-      setPersistedTransfers((current) => current.filter((transfer) => transfer.transferId !== transferId));
+      // 后端清理失败不影响前端已移除的条目。
     }
   }
 
@@ -1245,15 +1245,35 @@ function App() {
   async function uploadLocalFiles(localPaths: string[], targetDirectory: string) {
     const session = activeSession;
     if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
+    // 展开目录：如果路径中包含文件夹，递归获取所有文件并保持目录结构。
+    const expanded = await appApi.expandLocalPaths(localPaths);
+    if (expanded.length === 0) return;
     // 单文件上传走单连接 + 大缓冲（accelerated）；多文件走并发 + 普通缓冲，避免内存峰值。
-    const accelerated = localPaths.length === 1;
+    const accelerated = expanded.length === 1;
+    // 收集需要创建的远程目录（去重并按层级排序）
+    const dirsToCreate = new Set<string>();
+    for (const entry of expanded) {
+      const parts = entry.relativePath.replace(/\\/g, "/").split("/");
+      // 如果 relativePath 包含目录层级（如 "folder/sub/file.txt"），需要创建中间目录
+      for (let depth = 1; depth < parts.length; depth++) {
+        dirsToCreate.add(joinRemotePath(targetDirectory, parts.slice(0, depth).join("/")));
+      }
+    }
+    // 按路径长度排序确保父目录先创建
+    const sortedDirs = [...dirsToCreate].sort((a, b) => a.length - b.length);
+    for (const dir of sortedDirs) {
+      try {
+        await remoteApi.mkdir(session.sftpId, dir);
+      } catch {
+        // 目录可能已存在，忽略错误
+      }
+    }
     const queuedTransfers = await runUploadQueue(
-      localPaths,
-      accelerated ? 1 : uploadConcurrency(localPaths.length),
-      (localPath) => {
-        const name = localPath.split(/[\\/]/).filter(Boolean).pop();
-        if (!name) return Promise.resolve(null);
-        return remoteApi.upload(session.sftpId!, localPath, joinRemotePath(targetDirectory, name), true, accelerated);
+      expanded,
+      accelerated ? 1 : uploadConcurrency(expanded.length),
+      (entry) => {
+        const remotePath = joinRemotePath(targetDirectory, entry.relativePath.replace(/\\/g, "/"));
+        return remoteApi.upload(session.sftpId!, entry.localPath, remotePath, true, accelerated);
       },
     );
     queuedTransfers.filter(Boolean).forEach((transfer) => upsertTransfer(transfer as TransferInfo));
