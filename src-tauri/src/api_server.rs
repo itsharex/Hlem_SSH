@@ -21,12 +21,15 @@ use crate::backup::{backup_file_name, build_backup_package};
 use crate::remote::RemoteRuntime;
 use crate::vault::VaultStore;
 
+use tauri::AppHandle;
+
 /// Maximum upload body size: 512 MB
 const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ApiServerState {
     pub api_key: Arc<RwLock<String>>,
+    pub app: AppHandle,
     pub remote: RemoteRuntime,
     pub vault: Arc<Mutex<VaultStore>>,
     pub allowed_session_id: Option<String>,
@@ -73,6 +76,7 @@ impl ApiServerHandle {
 }
 
 pub async fn start_server(
+    app: AppHandle,
     remote: RemoteRuntime,
     vault: Arc<Mutex<VaultStore>>,
     port: u16,
@@ -86,6 +90,7 @@ pub async fn start_server(
     let logs = Arc::new(RwLock::new(existing_logs));
     let state = ApiServerState {
         api_key: Arc::new(RwLock::new(api_key.clone())),
+        app,
         remote,
         vault,
         allowed_session_id: allowed_session_id.clone(),
@@ -431,25 +436,62 @@ async fn upload_file(
 
     let size = data.len() as u64;
     verify_session_access(&state, &session_id)?;
+
+    // Write to temp file for the transfer system
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("helm_upload_{}", uuid::Uuid::new_v4()));
+    tokio::fs::write(&temp_file, &data).await.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: format!("写入临时文件失败: {}", e) }),
+    ))?;
+
+    // Get sftp_id for this session
+    let sftp_id = state.remote.find_sftp_id_for_session(&session_id).await
+        .map_err(|e| map_remote_error(e, &state))?;
+
     let start = std::time::Instant::now();
-    let upload_result = state
-        .remote
-        .api_upload(&session_id, &remote_path, data)
-        .await;
+    let transfer_result = state.remote.transfer_upload(
+        &state.app,
+        sftp_id,
+        temp_file.to_string_lossy().to_string(),
+        remote_path.clone(),
+        true,  // overwrite
+        false, // accelerated
+        false, // resume
+    ).await;
+    let elapsed_start = start.elapsed().as_millis() as u64;
+
+    let transfer_info = match transfer_result {
+        Ok(info) => info,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_file).await;
+            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed_start).await;
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })));
+        }
+    };
+
+    // Wait for transfer to complete
+    let final_info = state.remote.wait_transfer(&transfer_info.transfer_id).await;
     let elapsed = start.elapsed().as_millis() as u64;
 
-    match &upload_result {
-        Ok(()) => push_log(&state, "upload", &format!("{} ({}B)", remote_path, size), true, elapsed).await,
-        Err(e) => push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed).await,
+    // Clean up temp file
+    let _ = tokio::fs::remove_file(&temp_file).await;
+
+    match final_info {
+        Ok(info) if matches!(info.status, crate::remote::TaskStatus::Completed) => {
+            push_log(&state, "upload", &format!("{} ({}B)", remote_path, size), true, elapsed).await;
+            Ok(Json(UploadResponse { success: true, remote_path, size }))
+        }
+        Ok(info) => {
+            let err_msg = info.error.unwrap_or_else(|| "传输失败".to_string());
+            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, err_msg), &state), false, elapsed).await;
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: err_msg })))
+        }
+        Err(e) => {
+            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed).await;
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))
+        }
     }
-
-    upload_result.map_err(|e| map_remote_error(e, &state))?;
-
-    Ok(Json(UploadResponse {
-        success: true,
-        remote_path,
-        size,
-    }))
 }
 
 async fn list_files(
@@ -490,40 +532,64 @@ async fn download_file(
     drop(key);
 
     verify_session_access(&state, &query.session_id)?;
+
+    // Get sftp_id for this session
+    let sftp_id = state.remote.find_sftp_id_for_session(&query.session_id).await
+        .map_err(|e| map_remote_error(e, &state))?;
+
+    // Create temp file for download
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("helm_download_{}", uuid::Uuid::new_v4()));
+
     let start = std::time::Instant::now();
-    let data = state
-        .remote
-        .api_download(&query.session_id, &query.path)
-        .await;
+    let transfer_result = state.remote.transfer_download(
+        &state.app,
+        sftp_id,
+        query.path.clone(),
+        temp_file.to_string_lossy().to_string(),
+        true, // overwrite
+    ).await;
+
+    let transfer_info = match transfer_result {
+        Ok(info) => info,
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            let _ = tokio::fs::remove_file(&temp_file).await;
+            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })));
+        }
+    };
+
+    // Wait for transfer to complete
+    let final_info = state.remote.wait_transfer(&transfer_info.transfer_id).await;
     let elapsed = start.elapsed().as_millis() as u64;
 
-    match &data {
-        Ok(bytes) => push_log(&state, "download", &format!("{} ({}B)", query.path, bytes.len()), true, elapsed).await,
-        Err(e) => push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await,
+    match final_info {
+        Ok(info) if matches!(info.status, crate::remote::TaskStatus::Completed) => {
+            let data = tokio::fs::read(&temp_file).await.map_err(|e| {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("读取临时文件失败: {}", e) }))
+            })?;
+            let _ = tokio::fs::remove_file(&temp_file).await;
+            push_log(&state, "download", &format!("{} ({}B)", query.path, data.len()), true, elapsed).await;
+
+            let file_name = query.path.rsplit('/').next().unwrap_or("file").to_string();
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", "application/octet-stream".parse().unwrap());
+            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", file_name).parse().unwrap());
+            Ok((StatusCode::OK, headers, data))
+        }
+        Ok(info) => {
+            let _ = tokio::fs::remove_file(&temp_file).await;
+            let err_msg = info.error.unwrap_or_else(|| "传输失败".to_string());
+            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, err_msg), &state), false, elapsed).await;
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: err_msg })))
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_file).await;
+            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))
+        }
     }
-
-    let data = data.map_err(|e| map_remote_error(e, &state))?;
-
-    let file_name = query
-        .path
-        .rsplit('/')
-        .next()
-        .unwrap_or("file")
-        .to_string();
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-type",
-        "application/octet-stream".parse().unwrap(),
-    );
-    headers.insert(
-        "content-disposition",
-        format!("attachment; filename=\"{}\"", file_name)
-            .parse()
-            .unwrap(),
-    );
-
-    Ok((StatusCode::OK, headers, data))
 }
 
 

@@ -1240,6 +1240,7 @@ fn apply_global_proxy(session: &mut SessionConfig, settings: &AppSettings) {
 
 #[tauri::command]
 pub async fn api_server_start(
+    app: AppHandle,
     state: State<'_, AppState>,
     port: u16,
     allowed_session_id: Option<String>,
@@ -1276,7 +1277,7 @@ pub async fn api_server_start(
         }).ok().flatten()
     });
     let log_file = state.data_dir.join("api_logs.json");
-    let server_handle = api_server::start_server(state.remote.clone(), state.vault.clone(), port, api_key.clone(), allowed_session_id.clone(), allowed_session_name, log_file)
+    let server_handle = api_server::start_server(app, state.remote.clone(), state.vault.clone(), port, api_key.clone(), allowed_session_id.clone(), allowed_session_name, log_file)
         .await
         .map_err(|e| AppError::Remote(e))?;
     let info = ApiServerInfo {
@@ -1315,7 +1316,7 @@ pub async fn api_server_status(state: State<'_, AppState>) -> AppResult<ApiServe
 }
 
 #[tauri::command]
-pub async fn api_server_regenerate_key(state: State<'_, AppState>) -> AppResult<ApiServerInfo> {
+pub async fn api_server_regenerate_key(app: AppHandle, state: State<'_, AppState>) -> AppResult<ApiServerInfo> {
     ensure_vault_unlocked(&state)?;
     let new_key = generate_api_key();
     with_store(&state, |store| {
@@ -1332,7 +1333,7 @@ pub async fn api_server_regenerate_key(state: State<'_, AppState>) -> AppResult<
         let allowed_name = handle.allowed_session_name.clone();
         let log_file = handle.log_file.clone();
         handle.stop();
-        let server_handle = api_server::start_server(state.remote.clone(), state.vault.clone(), port, new_key.clone(), allowed, allowed_name, log_file)
+        let server_handle = api_server::start_server(app, state.remote.clone(), state.vault.clone(), port, new_key.clone(), allowed, allowed_name, log_file)
             .await
             .map_err(|e| AppError::Remote(e))?;
         let info = ApiServerInfo {

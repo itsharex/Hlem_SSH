@@ -44,39 +44,6 @@ impl RemoteRuntime {
             .map_err(|e| e.to_string())
     }
 
-    /// Upload file content to a remote path via SFTP.
-    pub async fn api_upload(
-        &self,
-        session_id: &str,
-        remote_path: &str,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
-        let sftp = self.find_sftp_for_session(session_id).await?;
-        // Ensure parent directory exists
-        let parent = remote_path
-            .rsplit_once('/')
-            .map(|(p, _)| p)
-            .unwrap_or("/");
-        if !parent.is_empty() && parent != "/" {
-            let _ = sftp.create_dir(parent.to_string()).await;
-        }
-        // Write file
-        let mut file = sftp
-            .open_with_flags(
-                remote_path.to_string(),
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-            )
-            .await
-            .map_err(|e| format!("打开远程文件失败: {}", e))?;
-        file.write_all(&data)
-            .await
-            .map_err(|e| format!("写入远程文件失败: {}", e))?;
-        file.flush()
-            .await
-            .map_err(|e| format!("刷新远程文件失败: {}", e))?;
-        Ok(())
-    }
-
     /// List files in a remote directory.
     pub async fn api_list_files(
         &self,
@@ -121,37 +88,6 @@ impl RemoteRuntime {
             .collect())
     }
 
-    /// Download a file from remote.
-    pub async fn api_download(
-        &self,
-        session_id: &str,
-        remote_path: &str,
-    ) -> Result<Vec<u8>, String> {
-        let sftp = self.find_sftp_for_session(session_id).await?;
-        let mut file = sftp
-            .open(remote_path.to_string())
-            .await
-            .map_err(|e| format!("打开远程文件失败: {}", e))?;
-        let metadata = sftp
-            .metadata(remote_path.to_string())
-            .await
-            .map_err(|e| format!("获取文件信息失败: {}", e))?;
-        let size = metadata.len() as usize;
-        let mut buf = Vec::with_capacity(size);
-        let mut tmp = vec![0u8; 1024 * 1024];
-        loop {
-            let n = file
-                .read(&mut tmp)
-                .await
-                .map_err(|e| format!("读取远程文件失败: {}", e))?;
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&tmp[..n]);
-        }
-        Ok(buf)
-    }
-
     // ─── Internal helpers ──────────────────────────────────────────────────────
 
     async fn find_connection_for_session(&self, session_id: &str) -> Result<String, String> {
@@ -177,6 +113,17 @@ impl RemoteRuntime {
             .find(|record| record.info.connection_id == connection_id)
             .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?;
         Ok(record.next_transfer_session().await)
+    }
+
+    /// Find the sftp_id for a given session. Returns the sftp_id string.
+    pub async fn find_sftp_id_for_session(&self, session_id: &str) -> Result<String, String> {
+        let connection_id = self.find_connection_for_session(session_id).await?;
+        let sftp_sessions = self.sftp_sessions.read().await;
+        let record = sftp_sessions
+            .values()
+            .find(|record| record.info.connection_id == connection_id)
+            .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?;
+        Ok(record.info.sftp_id.clone())
     }
 
     /// Start a tunnel (port forward) based on a TunnelConfig. Returns (bind_host, bind_port, forward_id).
