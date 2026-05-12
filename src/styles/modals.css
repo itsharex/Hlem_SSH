@@ -2288,6 +2288,27 @@
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   border: 1px solid #e2e8f0;
   position: relative;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .3) transparent;
+}
+
+.aiApiEndpoints::-webkit-scrollbar {
+  width: 4px;
+}
+
+.aiApiEndpoints::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, .3);
+  border-radius: 2px;
+}
+
+.aiApiEndpoints::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, .5);
+}
+
+.aiApiEndpoints::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .aiApiEndpointTitle {

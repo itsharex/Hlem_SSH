@@ -178,4 +178,162 @@ impl RemoteRuntime {
             .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?;
         Ok(record.next_transfer_session().await)
     }
+
+    /// Start a tunnel (port forward) based on a TunnelConfig. Returns (bind_host, bind_port, forward_id).
+    pub async fn api_start_tunnel(
+        &self,
+        tunnel: &crate::config::TunnelConfig,
+    ) -> Result<(String, u16, String), String> {
+        let connection_id = self.find_connection_for_session(&tunnel.session_id).await?;
+        let connection = self.connection(&connection_id).await.map_err(|e| e.to_string())?;
+
+        match tunnel.forward_type.as_str() {
+            "local" => {
+                let listener = TcpListener::bind((tunnel.bind_host.as_str(), tunnel.bind_port))
+                    .await
+                    .map_err(|e| format!("绑定端口失败: {}", e))?;
+                let actual_port = listener.local_addr().map_err(|e| format!("获取端口失败: {}", e))?.port();
+                let forward_id = Uuid::new_v4().to_string();
+                let info = ForwardInfo {
+                    forward_id: forward_id.clone(),
+                    session_id: tunnel.session_id.clone(),
+                    forward_type: ForwardType::Local,
+                    bind_host: tunnel.bind_host.clone(),
+                    bind_port: actual_port,
+                    target_host: tunnel.target_host.clone(),
+                    target_port: tunnel.target_port,
+                    status: TaskStatus::Running,
+                    started_at: now(),
+                    error: None,
+                };
+                let handle = connection.handle.clone();
+                let remote_host = tunnel.target_host.clone();
+                let remote_port = tunnel.target_port;
+                let task = tokio::spawn(async move {
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, _)) => {
+                                let handle = handle.clone();
+                                let host = remote_host.clone();
+                                tokio::spawn(async move {
+                                    let _ = pipe_local_to_ssh(stream, handle, host, remote_port).await;
+                                });
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+                self.forwards.write().await.insert(
+                    forward_id.clone(),
+                    ForwardRecord { info, handle: Some(task) },
+                );
+                Ok((tunnel.bind_host.clone(), actual_port, forward_id))
+            }
+            "dynamic" => {
+                let listener = TcpListener::bind((tunnel.bind_host.as_str(), tunnel.bind_port))
+                    .await
+                    .map_err(|e| format!("绑定端口失败: {}", e))?;
+                let actual_port = listener.local_addr().map_err(|e| format!("获取端口失败: {}", e))?.port();
+                let forward_id = Uuid::new_v4().to_string();
+                let info = ForwardInfo {
+                    forward_id: forward_id.clone(),
+                    session_id: tunnel.session_id.clone(),
+                    forward_type: ForwardType::Dynamic,
+                    bind_host: tunnel.bind_host.clone(),
+                    bind_port: actual_port,
+                    target_host: "SOCKS5".to_string(),
+                    target_port: 0,
+                    status: TaskStatus::Running,
+                    started_at: now(),
+                    error: None,
+                };
+                let handle = connection.handle.clone();
+                let task = tokio::spawn(async move {
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, _)) => {
+                                let handle = handle.clone();
+                                tokio::spawn(async move {
+                                    let _ = handle_socks5(stream, handle).await;
+                                });
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+                self.forwards.write().await.insert(
+                    forward_id.clone(),
+                    ForwardRecord { info, handle: Some(task) },
+                );
+                Ok((tunnel.bind_host.clone(), actual_port, forward_id))
+            }
+            "remote" => {
+                let target = RemoteForwardTarget {
+                    local_host: tunnel.target_host.clone(),
+                    local_port: tunnel.target_port,
+                };
+                connection.remote_forwards.write().await.insert(
+                    forward_key(&tunnel.bind_host, tunnel.bind_port),
+                    target,
+                );
+                let assigned_port = {
+                    let handle = connection.handle.lock().await;
+                    handle
+                        .tcpip_forward(tunnel.bind_host.clone(), tunnel.bind_port as u32)
+                        .await
+                        .map_err(|e| format!("远程转发失败: {}", e))? as u16
+                };
+                let forward_id = Uuid::new_v4().to_string();
+                let info = ForwardInfo {
+                    forward_id: forward_id.clone(),
+                    session_id: tunnel.session_id.clone(),
+                    forward_type: ForwardType::Remote,
+                    bind_host: tunnel.bind_host.clone(),
+                    bind_port: assigned_port,
+                    target_host: "local".to_string(),
+                    target_port: tunnel.target_port,
+                    status: TaskStatus::Running,
+                    started_at: now(),
+                    error: None,
+                };
+                self.forwards.write().await.insert(
+                    forward_id.clone(),
+                    ForwardRecord { info, handle: None },
+                );
+                Ok((tunnel.bind_host.clone(), assigned_port, forward_id))
+            }
+            other => Err(format!("不支持的隧道类型: {}", other)),
+        }
+    }
+
+    /// Stop a running tunnel by forward_id.
+    pub async fn api_stop_tunnel(&self, forward_id: &str) -> Result<(), String> {
+        let mut record = self
+            .forwards
+            .write()
+            .await
+            .remove(forward_id)
+            .ok_or_else(|| format!("转发 {} 不存在或已停止", forward_id))?;
+        if let Some(handle) = record.handle.take() {
+            handle.abort();
+        }
+        if matches!(record.info.forward_type, ForwardType::Remote) {
+            if let Some(connection) = self
+                .find_connection_by_session(&record.info.session_id)
+                .await
+            {
+                let handle = connection.handle.lock().await;
+                let _ = handle
+                    .cancel_tcpip_forward(record.info.bind_host.clone(), record.info.bind_port as u32)
+                    .await;
+                connection
+                    .remote_forwards
+                    .write()
+                    .await
+                    .remove(&forward_key(&record.info.bind_host, record.info.bind_port));
+            }
+        }
+        record.info.status = TaskStatus::Canceled;
+        Ok(())
+    }
 }

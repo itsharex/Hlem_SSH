@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Query, State as AxumState},
@@ -16,7 +16,10 @@ use tokio::{
 };
 use tower_http::cors::CorsLayer;
 
+use crate::config::{BackupRecord, BackupSettings, TunnelConfig, TunnelInput};
+use crate::backup::{backup_file_name, build_backup_package};
 use crate::remote::RemoteRuntime;
+use crate::vault::VaultStore;
 
 /// Maximum upload body size: 512 MB
 const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
@@ -25,6 +28,7 @@ const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
 pub struct ApiServerState {
     pub api_key: Arc<RwLock<String>>,
     pub remote: RemoteRuntime,
+    pub vault: Arc<Mutex<VaultStore>>,
     pub allowed_session_id: Option<String>,
     pub allowed_session_name: Option<String>,
     pub logs: Arc<RwLock<Vec<ApiLogEntry>>>,
@@ -70,6 +74,7 @@ impl ApiServerHandle {
 
 pub async fn start_server(
     remote: RemoteRuntime,
+    vault: Arc<Mutex<VaultStore>>,
     port: u16,
     api_key: String,
     allowed_session_id: Option<String>,
@@ -82,6 +87,7 @@ pub async fn start_server(
     let state = ApiServerState {
         api_key: Arc::new(RwLock::new(api_key.clone())),
         remote,
+        vault,
         allowed_session_id: allowed_session_id.clone(),
         allowed_session_name: allowed_session_name.clone(),
         logs: logs.clone(),
@@ -94,6 +100,16 @@ pub async fn start_server(
         .route("/api/upload", post(upload_file))
         .route("/api/files", get(list_files))
         .route("/api/download", get(download_file))
+        .route("/api/tunnels", get(list_tunnels))
+        .route("/api/tunnels/create", post(create_tunnel))
+        .route("/api/tunnels/update", post(update_tunnel))
+        .route("/api/tunnels/delete", post(delete_tunnel))
+        .route("/api/tunnels/start", post(start_tunnel))
+        .route("/api/tunnels/stop", post(stop_tunnel))
+        .route("/api/backup/settings", get(get_backup_settings).post(update_backup_settings))
+        .route("/api/backup/records", get(list_backup_records))
+        .route("/api/backup/run", post(run_backup))
+        .route("/api/backup/delete", post(delete_backup_record))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -583,4 +599,444 @@ fn check_dangerous_command(command: &str) -> Option<&'static str> {
     }
 
     None
+}
+
+// ─── Tunnel types ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelUpdateRequest {
+    tunnel_id: String,
+    #[serde(flatten)]
+    input: TunnelInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelIdRequest {
+    tunnel_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelStartResponse {
+    success: bool,
+    forward_id: String,
+    bind_host: String,
+    bind_port: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelStopResponse {
+    success: bool,
+}
+
+// ─── Tunnel handlers ───────────────────────────────────────────────────────────
+
+async fn list_tunnels(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+) -> Result<Json<Vec<TunnelConfig>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let tunnels = {
+        let store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.tunnels().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?
+    };
+    Ok(Json(tunnels))
+}
+
+async fn create_tunnel(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(input): Json<TunnelInput>,
+) -> Result<Json<Vec<TunnelConfig>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let result = {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.create_tunnel(input.clone())
+    };
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(_) => push_log(&state, "tunnel", &format!("创建隧道「{}」", input.name), true, elapsed).await,
+        Err(e) => push_log(&state, "tunnel", &format!("创建隧道失败: {}", e), false, elapsed).await,
+    }
+
+    let snapshot = result.map_err(|e| (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+    Ok(Json(snapshot.data.tunnels))
+}
+
+async fn update_tunnel(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<TunnelUpdateRequest>,
+) -> Result<Json<Vec<TunnelConfig>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let result = {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.update_tunnel(&body.tunnel_id, body.input.clone())
+    };
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(_) => push_log(&state, "tunnel", &format!("更新隧道「{}」", body.input.name), true, elapsed).await,
+        Err(e) => push_log(&state, "tunnel", &format!("更新隧道失败: {}", e), false, elapsed).await,
+    }
+
+    let snapshot = result.map_err(|e| (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+    Ok(Json(snapshot.data.tunnels))
+}
+
+async fn delete_tunnel(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<TunnelIdRequest>,
+) -> Result<Json<Vec<TunnelConfig>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let result = {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.delete_tunnel(&body.tunnel_id)
+    };
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(_) => push_log(&state, "tunnel", &format!("删除隧道 {}", body.tunnel_id), true, elapsed).await,
+        Err(e) => push_log(&state, "tunnel", &format!("删除隧道失败: {}", e), false, elapsed).await,
+    }
+
+    let snapshot = result.map_err(|e| (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+    Ok(Json(snapshot.data.tunnels))
+}
+
+async fn start_tunnel(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<TunnelIdRequest>,
+) -> Result<Json<TunnelStartResponse>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    // Look up tunnel config from vault
+    let tunnel = {
+        let store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        let tunnels = store.tunnels().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        tunnels.into_iter().find(|t| t.id == body.tunnel_id).ok_or_else(|| (
+            StatusCode::NOT_FOUND,
+            Json(ApiError { error: format!("隧道 {} 不存在", body.tunnel_id) }),
+        ))?
+    };
+
+    verify_session_access(&state, &tunnel.session_id)?;
+
+    let start = std::time::Instant::now();
+    let result = state.remote.api_start_tunnel(&tunnel).await;
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(info) => push_log(&state, "tunnel", &format!("启动「{}」{}:{}", tunnel.name, info.0, info.1), true, elapsed).await,
+        Err(e) => push_log(&state, "tunnel", &friendly_error_detail(&format!("启动「{}」失败: {}", tunnel.name, e), &state), false, elapsed).await,
+    }
+
+    let (bind_host, bind_port, forward_id) = result.map_err(|e| map_remote_error(e, &state))?;
+
+    Ok(Json(TunnelStartResponse {
+        success: true,
+        forward_id,
+        bind_host,
+        bind_port,
+    }))
+}
+
+async fn stop_tunnel(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<TunnelIdRequest>,
+) -> Result<Json<TunnelStopResponse>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    // The tunnel_id here is actually the forward_id (running instance ID)
+    let start = std::time::Instant::now();
+    let result = state.remote.api_stop_tunnel(&body.tunnel_id).await;
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(()) => push_log(&state, "tunnel", &format!("停止隧道 {}", body.tunnel_id), true, elapsed).await,
+        Err(e) => push_log(&state, "tunnel", &format!("停止隧道失败: {}", e), false, elapsed).await,
+    }
+
+    result.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: e }),
+    ))?;
+
+    Ok(Json(TunnelStopResponse { success: true }))
+}
+
+// ─── Backup handlers ───────────────────────────────────────────────────────────
+
+async fn get_backup_settings(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+) -> Result<Json<BackupSettings>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let settings = {
+        let store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        let snapshot = store.snapshot().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        snapshot.data.settings.backup
+    };
+    Ok(Json(settings))
+}
+
+async fn update_backup_settings(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(backup): Json<BackupSettings>,
+) -> Result<Json<BackupSettings>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let result = {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        let snapshot = store.snapshot().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        let mut settings = snapshot.data.settings.clone();
+        settings.backup = backup.clone();
+        store.settings_update(settings)
+    };
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(_) => push_log(&state, "backup", "更新备份配置", true, elapsed).await,
+        Err(e) => push_log(&state, "backup", &format!("更新备份配置失败: {}", e), false, elapsed).await,
+    }
+
+    result.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+    Ok(Json(backup))
+}
+
+async fn list_backup_records(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+) -> Result<Json<Vec<BackupRecord>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let records = {
+        let store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        let snapshot = store.snapshot().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        snapshot.data.backup_records
+    };
+    Ok(Json(records))
+}
+
+async fn run_backup(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+) -> Result<Json<Vec<BackupRecord>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+
+    let (settings, vault_path, file_name) = {
+        let store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.ensure_unlocked().map_err(|e| (
+            StatusCode::FORBIDDEN,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        let snapshot = store.snapshot().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        (snapshot.data.settings.backup, store.vault_file_path(), backup_file_name())
+    };
+
+    let bytes = tokio::fs::read(&vault_path).await.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: format!("读取 vault 文件失败: {}", e) }),
+    ))?;
+
+    let package = build_backup_package(bytes).await.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+
+    let size = package.len() as u64;
+    let has_local = settings.local_directory.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false);
+
+    if !has_local && !settings.cloud.enabled {
+        let elapsed = start.elapsed().as_millis() as u64;
+        push_log(&state, "backup", "备份失败: 未配置备份目录", false, elapsed).await;
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: "请先配置本地备份目录或启用云端备份".to_string() }),
+        ));
+    }
+
+    let mut outcomes = Vec::new();
+    if has_local {
+        let directory = PathBuf::from(settings.local_directory.as_deref().unwrap().trim());
+        let target = directory.join(&file_name);
+        match async {
+            tokio::fs::create_dir_all(&directory).await?;
+            tokio::fs::write(&target, &package).await?;
+            Ok::<(), std::io::Error>(())
+        }.await {
+            Ok(()) => outcomes.push(BackupRecord::success(
+                file_name.clone(), "local", target.to_string_lossy().to_string(), size,
+            )),
+            Err(e) => outcomes.push(BackupRecord::failed(
+                file_name.clone(), "local", target.to_string_lossy().to_string(), e.to_string(),
+            )),
+        }
+    }
+
+    let elapsed = start.elapsed().as_millis() as u64;
+    let success = outcomes.iter().any(|r| r.status == "success");
+    push_log(&state, "backup", &format!("立即备份 ({})", file_name), success, elapsed).await;
+
+    // Save records to vault
+    {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        let snapshot = store.snapshot().map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: e.to_string() }),
+        ))?;
+        let mut records = snapshot.data.backup_records.clone();
+        for outcome in &outcomes {
+            let already = records.iter().any(|r| r.target_kind == outcome.target_kind && r.target_path == outcome.target_path);
+            if outcome.status != "success" || !already {
+                records.push(outcome.clone());
+            }
+        }
+        let _ = store.replace_backup_records(records);
+    }
+
+    Ok(Json(outcomes))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupDeleteRequest {
+    record_id: String,
+    #[serde(default)]
+    delete_file: bool,
+}
+
+async fn delete_backup_record(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<BackupDeleteRequest>,
+) -> Result<Json<Vec<BackupRecord>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let result = {
+        let mut store = state.vault.lock().map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: "内部锁错误".to_string() }),
+        ))?;
+        store.delete_backup_record(&body.record_id, body.delete_file)
+    };
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match &result {
+        Ok(_) => push_log(&state, "backup", &format!("删除备份记录 {}", body.record_id), true, elapsed).await,
+        Err(e) => push_log(&state, "backup", &format!("删除备份记录失败: {}", e), false, elapsed).await,
+    }
+
+    let (snapshot, delete_path) = result.map_err(|e| (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError { error: e.to_string() }),
+    ))?;
+
+    if let Some(path) = delete_path {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    Ok(Json(snapshot.data.backup_records))
 }

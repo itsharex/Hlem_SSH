@@ -70,7 +70,11 @@ export function SettingsModal({
   const [aiApiLoading, setAiApiLoading] = useState(false);
   const [aiApiPort, setAiApiPort] = useState(19880);
   const [aiApiCopied, setAiApiCopied] = useState(false);
-  const [aiApiSessionId, setAiApiSessionId] = useState<string | null>(initialValue.aiApiSessionId ?? null);
+  const [aiApiSessionId, setAiApiSessionId] = useState<string | null>(() => {
+    const saved = initialValue.aiApiSessionId ?? null;
+    if (saved && sessions.some((s) => s.id === saved)) return saved;
+    return null;
+  });
   const [aiApiLogs, setAiApiLogs] = useState<ApiLogEntry[]>([]);
   const enabled = Form.useWatch("enabled", form);
 
@@ -214,73 +218,57 @@ export function SettingsModal({
   function copyApiInfo() {
     if (!aiApiInfo?.running) return;
     const selectedSession = aiApiSessionId ? sessions.find((s) => s.id === aiApiSessionId) : null;
-    const sessionNote = selectedSession
-      ? `- 指定会话: ${selectedSession.name} (${selectedSession.host})\n- Session ID: ${selectedSession.id}`
-      : "- 模式: 全部会话（需先调用 GET /api/sessions 获取 sessionId）";
     const sid = selectedSession ? selectedSession.id : "<sessionId>";
+    const base = `http://127.0.0.1:${aiApiInfo.port}`;
     const text = [
-      "# HelM 远程服务器操作指南",
+      "# HelM 远程服务器 API",
       "",
-      "你可以通过以下 API 操作我的远程服务器。所有请求必须携带认证头。",
+      "## 认证",
+      `Base URL: ${base}`,
+      `Header: Authorization: Bearer ${aiApiInfo.apiKey}`,
+      ...(selectedSession
+        ? [`会话: ${selectedSession.name} (${selectedSession.host})`, `Session ID: ${sid}`]
+        : ["模式: 全部会话（先调 GET /api/sessions 获取 sessionId）"]),
       "",
-      "## 连接信息",
-      `- Base URL: http://127.0.0.1:${aiApiInfo.port}`,
-      `- API Key: ${aiApiInfo.apiKey}`,
-      `- 认证头: Authorization: Bearer ${aiApiInfo.apiKey}`,
-      sessionNote,
+      "## 远程操作",
       "",
-      "## 可用操作",
+      `| 接口 | 说明 | 参数 |`,
+      `|------|------|------|`,
+      `| GET /api/sessions | 列出已连接会话 | — |`,
+      `| POST /api/exec | 执行命令 | {sessionId, command, timeoutMs?} → {exitCode, stdout, stderr} |`,
+      `| POST /api/upload | 上传文件 | multipart: sessionId, remotePath, file |`,
+      `| GET /api/files | 浏览目录 | ?sessionId=&path= → [{name, path, fileType, size}] |`,
+      `| GET /api/download | 下载文件 | ?sessionId=&path= → 二进制流 |`,
       "",
-      ...(selectedSession ? [] : [
-        "### 1. 查看已连接的服务器",
-        "```",
-        `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" http://127.0.0.1:${aiApiInfo.port}/api/sessions`,
-        "```",
-        "返回: [{sessionId, name, host, connected, sftpAvailable}]",
-        "",
-      ]),
-      `### ${selectedSession ? "1" : "2"}. 执行命令`,
-      "```",
-      `curl -X POST http://127.0.0.1:${aiApiInfo.port}/api/exec \\`,
-      `  -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
-      `  -H "Content-Type: application/json" \\`,
-      `  -d '{"sessionId":"${sid}","command":"ls -la","timeoutMs":30000}'`,
-      "```",
-      "返回: {exitCode, stdout, stderr}",
+      "## 隧道管理",
       "",
-      `### ${selectedSession ? "2" : "3"}. 上传文件`,
-      "```",
-      `curl -X POST http://127.0.0.1:${aiApiInfo.port}/api/upload \\`,
-      `  -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
-      `  -F "sessionId=${sid}" \\`,
-      `  -F "remotePath=/home/user/file.txt" \\`,
-      `  -F "file=@local_file.txt"`,
-      "```",
-      "返回: {success, remotePath, size}",
+      `| 接口 | 说明 | 参数 |`,
+      `|------|------|------|`,
+      `| GET /api/tunnels | 列出隧道模板 | — |`,
+      `| POST /api/tunnels/create | 新建隧道 | {name, sessionId, forwardType: "local"/"remote"/"dynamic", bindHost, bindPort, targetHost, targetPort} |`,
+      `| POST /api/tunnels/update | 编辑隧道 | {tunnelId, ...同上} |`,
+      `| POST /api/tunnels/delete | 删除隧道 | {tunnelId} |`,
+      `| POST /api/tunnels/start | 启动隧道 | {tunnelId} → {forwardId, bindHost, bindPort} |`,
+      `| POST /api/tunnels/stop | 停止隧道 | {tunnelId: "forwardId"} |`,
       "",
-      `### ${selectedSession ? "3" : "4"}. 浏览远程目录`,
-      "```",
-      `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
-      `  "http://127.0.0.1:${aiApiInfo.port}/api/files?sessionId=${sid}&path=/home"`,
-      "```",
-      "返回: [{name, path, fileType, size}]",
+      "## 数据备份",
       "",
-      `### ${selectedSession ? "4" : "5"}. 下载文件`,
-      "```",
-      `curl -H "Authorization: Bearer ${aiApiInfo.apiKey}" \\`,
-      `  "http://127.0.0.1:${aiApiInfo.port}/api/download?sessionId=${sid}&path=/home/user/file.txt" -o file.txt`,
-      "```",
+      `| 接口 | 说明 | 参数 |`,
+      `|------|------|------|`,
+      `| GET /api/backup/settings | 获取备份配置 | — |`,
+      `| POST /api/backup/settings | 更新备份配置 | {localDirectory, autoEnabled, frequency, retentionCount, retentionDays, cloud: {enabled, kind: "webdav"/"s3", webdav: {endpoint, username, password, remotePath}, s3: {endpoint, region, bucket, accessKeyId, secretAccessKey, prefix}}} |`,
+      `| GET /api/backup/records | 列出备份记录 | — |`,
+      `| POST /api/backup/run | 立即备份 | — |`,
+      `| POST /api/backup/delete | 删除备份记录 | {recordId, deleteFile?} |`,
       "",
-      "## 使用流程",
-      ...(selectedSession ? [
-        `1. 直接使用 sessionId: ${selectedSession.id}`,
-        "2. 所有路径使用绝对路径（如 /home/user/...）",
-      ] : [
-        "1. 先调用 GET /api/sessions 获取可用的 sessionId",
-        "2. 用获取到的 sessionId 执行命令、上传文件或浏览目录",
-        "3. 所有路径使用绝对路径（如 /home/user/...）",
-        "4. 每个请求必须指定 sessionId，因为可能同时连接多台服务器",
-      ]),
+      "## 规则",
+      "",
+      "- 所有 POST 请求 Content-Type: application/json（upload 除外用 multipart）",
+      `- sessionId 固定使用: ${sid}`,
+      "- 路径使用绝对路径（如 /home/user/...）",
+      "- 返回 503 表示会话未连接，需用户在 HelM 手动连接后重试，不要自动重连",
+      "- API Key 持久有效，无需重复获取",
+      "- 隧道启动前需确保对应会话已连接",
     ].join("\n");
     void navigator.clipboard.writeText(text).then(() => {
       setAiApiCopied(true);
@@ -645,6 +633,18 @@ export function SettingsModal({
               style={{ width: 120 }}
             />
           </div>
+          <div className="aiApiFormRow">
+            <span className="aiApiFormLabel">指定会话</span>
+            <Select
+              style={{ flex: 1 }}
+              placeholder="全部会话（AI 可访问所有已连接终端）"
+              allowClear
+              disabled={aiApiInfo?.running}
+              value={aiApiSessionId}
+              onChange={(value) => void changeAiApiSession(value ?? null)}
+              options={sessions.map((s) => ({ label: s.name, value: s.id }))}
+            />
+          </div>
           {aiApiInfo?.running && aiApiInfo.apiKey && (
             <>
               <div className="aiApiFormRow">
@@ -672,17 +672,6 @@ export function SettingsModal({
                   />
                 </Tooltip>
               </div>
-              <div className="aiApiFormRow">
-                <span className="aiApiFormLabel">指定会话</span>
-                <Select
-                  style={{ flex: 1 }}
-                  placeholder="全部会话（AI 可访问所有已连接终端）"
-                  allowClear
-                  value={aiApiSessionId}
-                  onChange={(value) => void changeAiApiSession(value ?? null)}
-                  options={sessions.map((s) => ({ label: s.name, value: s.id }))}
-                />
-              </div>
               <div className="aiApiEndpoints">
                 <div className="aiApiEndpointHeader">
                   <div className="aiApiEndpointTitle">可用接口</div>
@@ -700,6 +689,13 @@ export function SettingsModal({
                 <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
                 <div className="aiApiEndpointItem"><code>GET /api/files</code> — 浏览目录</div>
                 <div className="aiApiEndpointItem"><code>GET /api/download</code> — 下载文件</div>
+                <div className="aiApiEndpointItem"><code>GET /api/tunnels</code> — 列出隧道模板</div>
+                <div className="aiApiEndpointItem"><code>POST /api/tunnels/create</code> — 新建隧道</div>
+                <div className="aiApiEndpointItem"><code>POST /api/tunnels/start</code> — 启动隧道</div>
+                <div className="aiApiEndpointItem"><code>POST /api/tunnels/stop</code> — 停止隧道</div>
+                <div className="aiApiEndpointItem"><code>GET /api/backup/settings</code> — 获取备份配置</div>
+                <div className="aiApiEndpointItem"><code>POST /api/backup/run</code> — 立即备份</div>
+                <div className="aiApiEndpointItem"><code>GET /api/backup/records</code> — 备份记录</div>
                 <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
               </div>
             </>

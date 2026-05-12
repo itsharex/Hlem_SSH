@@ -522,13 +522,15 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
               <span className="terminalHistoryTimelineItem" onMouseEnter={() => setHoveredHistoryIndex(index)}>
                 <span className="terminalHistoryTime">{formatHistoryTime(entry.timestamp)}</span>
                 <span className="terminalHistoryItem">{entry.command}</span>
-                <DeleteOutlined
-                  className="terminalHistoryDelete"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteHistoryEntry(index);
-                  }}
-                />
+                <Tooltip title="删除">
+                  <DeleteOutlined
+                    className="terminalHistoryDelete"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteHistoryEntry(index);
+                    }}
+                  />
+                </Tooltip>
               </span>
             ),
           })),

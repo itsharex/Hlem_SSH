@@ -2,7 +2,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use base64::{engine::general_purpose, Engine as _};
@@ -42,7 +42,7 @@ pub struct AppInfo {
 }
 
 pub struct AppState {
-    vault: Mutex<VaultStore>,
+    vault: Arc<Mutex<VaultStore>>,
     remote: RemoteRuntime,
     api_server: TokioMutex<Option<ApiServerHandle>>,
     data_dir: PathBuf,
@@ -52,7 +52,7 @@ impl AppState {
     pub fn new(vault_path: PathBuf) -> Self {
         let data_dir = vault_path.parent().unwrap_or(vault_path.as_path()).to_path_buf();
         Self {
-            vault: Mutex::new(VaultStore::new(vault_path)),
+            vault: Arc::new(Mutex::new(VaultStore::new(vault_path))),
             remote: RemoteRuntime::default(),
             api_server: TokioMutex::new(None),
             data_dir,
@@ -1276,7 +1276,7 @@ pub async fn api_server_start(
         }).ok().flatten()
     });
     let log_file = state.data_dir.join("api_logs.json");
-    let server_handle = api_server::start_server(state.remote.clone(), port, api_key.clone(), allowed_session_id.clone(), allowed_session_name, log_file)
+    let server_handle = api_server::start_server(state.remote.clone(), state.vault.clone(), port, api_key.clone(), allowed_session_id.clone(), allowed_session_name, log_file)
         .await
         .map_err(|e| AppError::Remote(e))?;
     let info = ApiServerInfo {
@@ -1332,7 +1332,7 @@ pub async fn api_server_regenerate_key(state: State<'_, AppState>) -> AppResult<
         let allowed_name = handle.allowed_session_name.clone();
         let log_file = handle.log_file.clone();
         handle.stop();
-        let server_handle = api_server::start_server(state.remote.clone(), port, new_key.clone(), allowed, allowed_name, log_file)
+        let server_handle = api_server::start_server(state.remote.clone(), state.vault.clone(), port, new_key.clone(), allowed, allowed_name, log_file)
             .await
             .map_err(|e| AppError::Remote(e))?;
         let info = ApiServerInfo {

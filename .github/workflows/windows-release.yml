@@ -187,7 +187,18 @@ jobs:
           } else {
             $range = "HEAD"
           }
-          $commits = git log $range --max-count=30 --no-merges --pretty=format:"- %s (%h)"
+          $logs = git log $range --max-count=30 --no-merges --pretty=format:"%s (%h)%n%b"
+          $lines = @()
+          foreach ($line in ($logs -split "`n")) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed) { continue }
+            if ($trimmed.StartsWith("- ")) {
+              $lines += "  $trimmed"
+            } else {
+              $lines += "- $trimmed"
+            }
+          }
+          $commits = $lines -join "`n"
           if (-not $commits) {
             $commits = "- Initial automated Windows release."
           }
@@ -202,7 +213,7 @@ jobs:
 
           ## 校验
 
-          See `SHA256SUMS.txt` in the release assets.
+          See ``SHA256SUMS.txt`` in the release assets.
           "@ | Set-Content RELEASE_NOTES.md
 
       - name: Generate signed update manifest
