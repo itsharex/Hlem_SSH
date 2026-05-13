@@ -17,6 +17,7 @@ import {
   TopBar,
   TransferCenter,
   TunnelDrawer,
+  preloadWorkspaceComponents,
 } from "./app/lazyComponents";
 import type { SessionModalState } from "./app/appTypes";
 import {
@@ -100,6 +101,7 @@ function App() {
   const [backupBusy, setBackupBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tunnelOpen, setTunnelOpen] = useState(false);
+  const [aiApiOpen, setAiApiOpen] = useState(false);
   const [apiServerRunning, setApiServerRunning] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -281,25 +283,18 @@ function App() {
   }
 
   async function handleMigrate(oldPassword: string) {
-    setMigrationBusy(true);
-    setMigrationError(undefined);
-    try {
-      const snapshot = await vaultApi.migrate(oldPassword);
-      setMigrationNeeded(false);
-      applySnapshot(snapshot);
-      void initializeAppInfo();
-    } catch (error) {
-      setMigrationError(getErrorMessage(error));
-    } finally {
-      setMigrationBusy(false);
-    }
+    await runMigration(() => vaultApi.migrate(oldPassword));
   }
 
   async function handleSkipMigration() {
+    await runMigration(() => vaultApi.skipMigration());
+  }
+
+  async function runMigration(action: () => Promise<ConfigSnapshot>) {
     setMigrationBusy(true);
     setMigrationError(undefined);
     try {
-      const snapshot = await vaultApi.skipMigration();
+      const snapshot = await action();
       setMigrationNeeded(false);
       applySnapshot(snapshot);
       void initializeAppInfo();
@@ -325,6 +320,24 @@ function App() {
       setAppInfo(info);
     } catch {
       // 版本信息失败不影响主流程。
+    }
+    try {
+      const status = await appApi.apiServerStatus();
+      setApiServerRunning(status.running);
+      // 自动启动 AI API 服务（仅在未运行且已配置时）
+      if (!status.running) {
+        const settings = configSnapshotRef.current?.data.settings;
+        if (settings?.aiApiAutoStart && settings.aiApiSessionId && settings.aiApiPort) {
+          try {
+            const info = await appApi.apiServerStart(settings.aiApiPort, settings.aiApiSessionId);
+            setApiServerRunning(info.running);
+          } catch {
+            // 自动启动失败不影响主流程。
+          }
+        }
+      }
+    } catch {
+      // API 状态查询失败不影响主流程。
     }
   }
 
@@ -355,8 +368,10 @@ function App() {
       if (manual) Modal.warning({ title: "未配置更新源", content: "发布版会由 GitHub Actions 自动写入更新仓库地址。" });
       return;
     }
-    if (manual) setUpdateChecking(true);
-    if (manual) setUpdateError(null);
+    if (manual) {
+      setUpdateChecking(true);
+      setUpdateError(null);
+    }
     try {
       const next = await appApi.checkUpdate(info.version, info.arch);
       if (next) {
@@ -372,9 +387,12 @@ function App() {
       }
     } catch (error) {
       const message = getErrorMessage(error);
-      if (manual) setUpdateError(message);
-      if (!manual) console.warn("[helm] auto update check failed:", message);
-      if (manual) Modal.error({ title: "检查更新失败", content: message });
+      if (manual) {
+        setUpdateError(message);
+        Modal.error({ title: "检查更新失败", content: message });
+      } else {
+        console.warn("[helm] auto update check failed:", message);
+      }
     } finally {
       if (manual) setUpdateChecking(false);
     }
@@ -395,11 +413,7 @@ function App() {
 
   async function installUpdate() {
     if (!downloadedUpdatePath) return;
-    try {
-      await appApi.installUpdate(downloadedUpdatePath);
-    } catch (error) {
-      Modal.error({ title: "启动安装程序失败", content: getErrorMessage(error) });
-    }
+    await safeAppAction("启动安装程序失败", () => appApi.installUpdate(downloadedUpdatePath!));
   }
 
   async function ignoreUpdateVersion(target = updateInfo) {
@@ -426,26 +440,22 @@ function App() {
   }
 
   async function openDatabaseDir() {
-    try {
-      await appApi.openDatabaseDir();
-    } catch (error) {
-      Modal.error({ title: "打开数据库目录失败", content: getErrorMessage(error) });
-    }
+    await safeAppAction("打开数据库目录失败", () => appApi.openDatabaseDir());
   }
 
   async function openPathDir(path: string) {
-    try {
-      await appApi.openPathDir(path);
-    } catch (error) {
-      Modal.error({ title: "打开目录失败", content: getErrorMessage(error) });
-    }
+    await safeAppAction("打开目录失败", () => appApi.openPathDir(path));
   }
 
   async function openExternalUrl(url: string) {
+    await safeAppAction("打开链接失败", () => appApi.openExternalUrl(url));
+  }
+
+  async function safeAppAction(errorTitle: string, action: () => Promise<unknown>) {
     try {
-      await appApi.openExternalUrl(url);
+      await action();
     } catch (error) {
-      Modal.error({ title: "打开链接失败", content: getErrorMessage(error) });
+      Modal.error({ title: errorTitle, content: getErrorMessage(error) });
     }
   }
 
@@ -462,6 +472,7 @@ function App() {
     });
     setActiveSessionId((current) => (preferredId || (mappedIds.includes(current) ? current : "")));
     setAppReady(true);
+    preloadWorkspaceComponents();
   }
 
   function activateSession(id: string) {
@@ -571,11 +582,6 @@ function App() {
 
   function updateSession(sessionId: string, updater: (session: RemoteSession) => RemoteSession) {
     setSessions((current) => current.map((session) => (session.id === sessionId ? updater(session) : session)));
-  }
-
-  function updateActiveSession(updater: (session: RemoteSession) => RemoteSession) {
-    if (!activeSession) return;
-    updateSession(activeSession.id, updater);
   }
 
   function formatSessionError(error: unknown, session: Pick<RemoteSession, "name" | "connectionId" | "terminalId" | "sftpId">): string {
@@ -1109,8 +1115,9 @@ function App() {
 
   async function changePath(path: string) {
     const session = activeSession;
-    updateActiveSession((item) => ({ ...item, currentPath: path }));
-    if (!session?.sftpId) return;
+    if (!session) return;
+    updateSession(session.id, (item) => ({ ...item, currentPath: path }));
+    if (!session.sftpId) return;
     setSessionFilesLoading(session.id, true);
     try {
       await refreshFiles(session.sftpId, path, session.id);
@@ -1459,6 +1466,8 @@ function App() {
     setForwards((current) => current.filter((forward) => forward.forwardId !== forwardId));
   }
 
+  const currentSettings = configSnapshot?.data.settings ?? { proxy: null, backup: defaultBackupSettings(), quickCommands: [] };
+
   return (
     <AppProviders>
       {/* 主界面始终渲染 */}
@@ -1483,8 +1492,9 @@ function App() {
                   sessionListOpen={sessionListOpen}
                   onSessionListOpenChange={setSessionListOpen}
                   apiServerRunning={apiServerRunning}
-                  onApiServerStop={() => {
-                    void appApi.apiServerStop().then(() => setApiServerRunning(false));
+                  apiConfigured={!!currentSettings.aiApiKey}
+                  onApiServerStart={() => {
+                    setAiApiOpen(true);
                   }}
                 />
                 {activeSession ? (
@@ -1497,7 +1507,7 @@ function App() {
                         top={
                           <TerminalPanel
                             session={activeSession}
-                            inputHistory={configSnapshot?.data.settings.terminalInputHistory ?? []}
+                            inputHistory={currentSettings.terminalInputHistory ?? []}
                             onSendData={(data) => void sendTerminalData(data)}
                             onSendCommand={(command) => void sendTerminalCommand(command)}
                             onResize={(cols, rows) => void resizeTerminal(activeSession.terminalId, cols, rows)}
@@ -1518,7 +1528,7 @@ function App() {
                             onReadText={readRemoteText}
                             onWriteText={writeRemoteText}
                             onSendCommand={sendTerminalCommand}
-                            quickCommands={configSnapshot?.data.settings.quickCommands ?? []}
+                            quickCommands={currentSettings.quickCommands ?? []}
                             onQuickCommandsChange={saveQuickCommands}
                             filesLoading={fileLoadingSessionIds.has(activeSession.id)}
                           />
@@ -1582,7 +1592,7 @@ function App() {
             <BackupModal
               open={backupOpen}
               busy={backupBusy}
-              settings={configSnapshot.data.settings ?? { proxy: null, backup: defaultBackupSettings(), quickCommands: [] }}
+              settings={currentSettings}
               records={configSnapshot.data.backupRecords ?? []}
               onClose={() => setBackupOpen(false)}
               onExport={exportBackup}
@@ -1594,13 +1604,15 @@ function App() {
             />
             <SettingsModal
               open={settingsOpen}
-              initialValue={configSnapshot.data.settings ?? { proxy: null, backup: defaultBackupSettings(), quickCommands: [] }}
+              initialValue={currentSettings}
               sessions={sessions}
               onClose={() => setSettingsOpen(false)}
               onSubmit={saveSettings}
               onBackupOpen={() => setBackupOpen(true)}
               onTunnelOpen={() => setTunnelOpen(true)}
               onApiServerChange={setApiServerRunning}
+              aiApiOpen={aiApiOpen}
+              onAiApiOpenChange={setAiApiOpen}
               appInfo={appInfo}
               updateInfo={updateInfo}
               updateError={updateError}

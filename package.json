@@ -1,11 +1,11 @@
 {
   "name": "helm",
   "private": true,
-  "version": "0.0.44",
+  "version": "0.0.45",
   "type": "module",
   "scripts": {
     "predev": "cargo run --quiet --release --manifest-path tools/free-port/Cargo.toml",
-    "dev": "vite --host 127.0.0.1 --port 5173",
+    "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

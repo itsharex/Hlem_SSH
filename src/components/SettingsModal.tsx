@@ -15,6 +15,8 @@ interface SettingsModalProps {
   onBackupOpen: () => void;
   onTunnelOpen: () => void;
   onApiServerChange: (running: boolean) => void;
+  aiApiOpen: boolean;
+  onAiApiOpenChange: (open: boolean) => void;
   appInfo: AppInfo | null;
   updateInfo: UpdateInfo | null;
   updateError: string | null;
@@ -47,6 +49,8 @@ export function SettingsModal({
   onBackupOpen,
   onTunnelOpen,
   onApiServerChange,
+  aiApiOpen,
+  onAiApiOpenChange,
   appInfo,
   updateInfo,
   updateError,
@@ -65,11 +69,11 @@ export function SettingsModal({
   const [form] = Form.useForm<SettingsFormValues>();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
-  const [aiApiOpen, setAiApiOpen] = useState(false);
   const [aiApiInfo, setAiApiInfo] = useState<ApiServerInfo | null>(null);
   const [aiApiLoading, setAiApiLoading] = useState(false);
-  const [aiApiPort, setAiApiPort] = useState(19880);
+  const [aiApiPort, setAiApiPort] = useState(() => initialValue.aiApiPort ?? 19880);
   const [aiApiCopied, setAiApiCopied] = useState(false);
+  const [aiApiAutoStart, setAiApiAutoStart] = useState(() => initialValue.aiApiAutoStart ?? false);
   const [aiApiSessionId, setAiApiSessionId] = useState<string | null>(() => {
     const saved = initialValue.aiApiSessionId ?? null;
     if (saved && sessions.some((s) => s.id === saved)) return saved;
@@ -87,12 +91,15 @@ export function SettingsModal({
       port: initialValue.proxy?.port ?? 1080,
     });
     setAiApiSessionId(initialValue.aiApiSessionId ?? null);
+    setAiApiPort(initialValue.aiApiPort ?? 19880);
+    setAiApiAutoStart(initialValue.aiApiAutoStart ?? false);
   }, [form, initialValue, open]);
 
   useEffect(() => {
     if (!aiApiOpen) return;
     const poll = () => void appApi.apiServerLogs().then(setAiApiLogs).catch(() => undefined);
     poll();
+    void refreshAiApiStatus();
     if (!aiApiInfo?.running) return;
     const timer = setInterval(poll, 500);
     return () => clearInterval(timer);
@@ -130,6 +137,8 @@ export function SettingsModal({
       const info = await appApi.apiServerStart(aiApiPort, aiApiSessionId);
       setAiApiInfo(info);
       onApiServerChange(true);
+      // 持久化端口配置
+      await vaultApi.settingsUpdate({ ...initialValue, aiApiPort, aiApiSessionId, aiApiAutoStart }).catch(() => undefined);
     } catch (error) {
       Modal.error({ title: "启动 API 服务失败", content: String(error) });
     } finally {
@@ -164,7 +173,7 @@ export function SettingsModal({
     setAiApiSessionId(sessionId);
     // Persist silently without triggering parent state update
     try {
-      await vaultApi.settingsUpdate({ ...initialValue, aiApiSessionId: sessionId });
+      await vaultApi.settingsUpdate({ ...initialValue, aiApiSessionId: sessionId, aiApiPort, aiApiAutoStart });
       const sessionName = sessions.find((s) => s.id === sessionId)?.name;
       message.success(sessionId ? `已切换至「${sessionName}」` : "已清除会话限制");
     } catch {
@@ -179,6 +188,17 @@ export function SettingsModal({
       } catch (error) {
         Modal.error({ title: "重启 API 服务失败", content: String(error) });
       }
+    }
+  }
+
+  async function changeAiApiAutoStart(checked: boolean) {
+    setAiApiAutoStart(checked);
+    try {
+      await vaultApi.settingsUpdate({ ...initialValue, aiApiAutoStart: checked, aiApiSessionId, aiApiPort });
+      message.success(checked ? "已开启随应用自动启动" : "已关闭自动启动");
+    } catch {
+      message.error("保存失败");
+      setAiApiAutoStart(!checked);
     }
   }
 
@@ -302,6 +322,7 @@ export function SettingsModal({
   };
 
   return (
+    <>
     <Modal
       open={open}
       title="全局设置"
@@ -322,7 +343,7 @@ export function SettingsModal({
             <Button block icon={<ApartmentOutlined />} onClick={onTunnelOpen}>
               SSH 隧道管理
             </Button>
-            <Button block icon={<ApiOutlined />} onClick={() => { setAiApiOpen(true); void refreshAiApiStatus(); }}>
+            <Button block icon={<ApiOutlined />} onClick={() => { onAiApiOpenChange(true); void refreshAiApiStatus(); }}>
               AI 接入
             </Button>
             <Button block icon={<InfoCircleOutlined />} onClick={() => setAboutOpen(true)}>
@@ -598,126 +619,138 @@ export function SettingsModal({
           )}
         </div>
       </Modal>
-      <Modal
-        open={aiApiOpen}
-        title="AI 接入"
-        className="aiApiModal"
-        footer={null}
-        onCancel={() => setAiApiOpen(false)}
-        destroyOnHidden
-        width={480}
-      >
-        <div className="aiApiContent">
-          <div className="aiApiPanel">
-            <div className="aiApiStatusRow">
-              <span className="aiApiStatusLabel">服务状态</span>
-              <span className={`aiApiStatusBadge aiApiStatusBadge-${aiApiInfo?.running ? "running" : "stopped"}`}>
-                {aiApiInfo?.running ? "运行中" : "已停止"}
-              </span>
-              {aiApiLogs.length > 0 && (
-                <Tooltip title="查看日志">
-                  <Button size="small" type="link" icon={<FundProjectionScreenOutlined />} onClick={() => void openLogWindow()} />
-                </Tooltip>
-              )}
-            </div>
-            <div className="aiApiFormRow">
-              <span className="aiApiFormLabel">监听端口</span>
-              <InputNumber
-                min={1024}
-                max={65535}
-                precision={0}
-                value={aiApiPort}
-                disabled={aiApiInfo?.running}
-                onChange={(value) => value && setAiApiPort(value)}
-                style={{ width: 120 }}
-              />
-            </div>
-            <div className="aiApiFormRow">
-              <span className="aiApiFormLabel">指定会话</span>
-              <Select
-                style={{ flex: 1 }}
-                placeholder="全部会话（AI 可访问所有已连接终端）"
-                allowClear
-                disabled={aiApiInfo?.running}
-                value={aiApiSessionId}
-                onChange={(value) => void changeAiApiSession(value ?? null)}
-                options={sessions.map((s) => ({ label: s.name, value: s.id }))}
-              />
-            </div>
-            {aiApiInfo?.running && aiApiInfo.apiKey && (
-              <>
-                <div className="aiApiFormRow">
-                  <span className="aiApiFormLabel">API 地址</span>
-                  <Input
-                    readOnly
-                    value={`http://127.0.0.1:${aiApiInfo.port}`}
-                    style={{ flex: 1 }}
-                    onClick={(e) => (e.target as HTMLInputElement).select()}
-                  />
-                </div>
-                <div className="aiApiFormRow">
-                  <span className="aiApiFormLabel">API Key</span>
-                  <Input.Password
-                    readOnly
-                    value={aiApiInfo.apiKey}
-                    style={{ flex: 1 }}
-                    onClick={(e) => (e.target as HTMLInputElement).select()}
-                  />
-                  <Tooltip title="重新生成密钥">
-                    <Button
-                      icon={<ReloadOutlined />}
-                      size="small"
-                      onClick={() => void regenerateKey()}
-                    />
-                  </Tooltip>
-                </div>
-              </>
+    </Modal>
+    <Modal
+      open={aiApiOpen}
+      title="AI 接入"
+      className="aiApiModal"
+      footer={null}
+      onCancel={() => onAiApiOpenChange(false)}
+      destroyOnHidden
+      width={480}
+    >
+      <div className="aiApiContent">
+        <div className="aiApiPanel">
+          <div className="aiApiStatusRow">
+            <span className="aiApiStatusLabel">服务状态</span>
+            <span className={`aiApiStatusBadge aiApiStatusBadge-${aiApiInfo?.running ? "running" : "stopped"}`}>
+              {aiApiInfo?.running ? "运行中" : "已停止"}
+            </span>
+            {aiApiLogs.length > 0 && (
+              <Tooltip title="查看日志">
+                <Button size="small" type="link" icon={<FundProjectionScreenOutlined />} onClick={() => void openLogWindow()} />
+              </Tooltip>
+            )}
+          </div>
+          <div className="aiApiFormRow">
+            <span className="aiApiFormLabel">监听端口</span>
+            <InputNumber
+              min={1024}
+              max={65535}
+              precision={0}
+              value={aiApiPort}
+              disabled={aiApiInfo?.running}
+              onChange={(value) => value && setAiApiPort(value)}
+              style={{ width: 120 }}
+            />
+          </div>
+          <div className="aiApiFormRow">
+            <span className="aiApiFormLabel">指定会话</span>
+            <Select
+              style={{ flex: 1 }}
+              placeholder="全部会话（AI 可访问所有已连接终端）"
+              allowClear
+              disabled={aiApiInfo?.running}
+              value={aiApiSessionId}
+              onChange={(value) => void changeAiApiSession(value ?? null)}
+              options={sessions.map((s) => ({ label: s.name, value: s.id }))}
+            />
+          </div>
+          <div className="aiApiFormRow">
+            <span className="aiApiFormLabel">随应用启动</span>
+            <Switch
+              checked={aiApiAutoStart}
+              disabled={!aiApiSessionId}
+              onChange={(checked) => void changeAiApiAutoStart(checked)}
+            />
+            {!aiApiSessionId && (
+              <span style={{ fontSize: 12, color: "var(--text-tertiary, #999)" }}>需先指定会话</span>
             )}
           </div>
           {aiApiInfo?.running && aiApiInfo.apiKey && (
-            <div className="aiApiPanel aiApiPanel-endpoints">
-              <div className="aiApiEndpointHeader">
-                <div className="aiApiEndpointTitle">可用接口</div>
-                <Tooltip title={aiApiCopied ? "已复制" : "复制 API 使用说明"}>
+            <>
+              <div className="aiApiFormRow">
+                <span className="aiApiFormLabel">API 地址</span>
+                <Input
+                  readOnly
+                  value={`http://127.0.0.1:${aiApiInfo.port}`}
+                  style={{ flex: 1 }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+              </div>
+              <div className="aiApiFormRow">
+                <span className="aiApiFormLabel">API Key</span>
+                <Input.Password
+                  readOnly
+                  value={aiApiInfo.apiKey}
+                  style={{ flex: 1 }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <Tooltip title="重新生成密钥">
                   <Button
-                    icon={aiApiCopied ? <CheckOutlined style={{ color: "#10b981" }} /> : <CopyOutlined />}
+                    icon={<ReloadOutlined />}
                     size="small"
-                    type="text"
-                    onClick={copyApiInfo}
+                    onClick={() => void regenerateKey()}
                   />
                 </Tooltip>
               </div>
-              <div className="aiApiEndpointScroll">
-                <div className="aiApiEndpointItem"><code>GET /api/sessions</code> — 列出已连接会话</div>
-                <div className="aiApiEndpointItem"><code>POST /api/exec</code> — 执行命令</div>
-                <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
-                <div className="aiApiEndpointItem"><code>GET /api/files</code> — 浏览目录</div>
-                <div className="aiApiEndpointItem"><code>GET /api/download</code> — 下载文件</div>
-                <div className="aiApiEndpointItem"><code>GET /api/tunnels</code> — 列出隧道模板</div>
-                <div className="aiApiEndpointItem"><code>POST /api/tunnels/create</code> — 新建隧道</div>
-                <div className="aiApiEndpointItem"><code>POST /api/tunnels/start</code> — 启动隧道</div>
-                <div className="aiApiEndpointItem"><code>POST /api/tunnels/stop</code> — 停止隧道</div>
-                <div className="aiApiEndpointItem"><code>GET /api/backup/settings</code> — 获取备份配置</div>
-                <div className="aiApiEndpointItem"><code>POST /api/backup/run</code> — 立即备份</div>
-                <div className="aiApiEndpointItem"><code>GET /api/backup/records</code> — 备份记录</div>
-              </div>
-              <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
-            </div>
+            </>
           )}
-          <div className="aiApiActions">
-            {aiApiInfo?.running ? (
-              <Button danger loading={aiApiLoading} onClick={() => void stopAiApi()}>
-                停止服务
-              </Button>
-            ) : (
-              <Button type="primary" loading={aiApiLoading} disabled={!aiApiSessionId} onClick={() => void startAiApi()}>
-                启动服务
-              </Button>
-            )}
-          </div>
         </div>
-      </Modal>
+        {aiApiInfo?.running && aiApiInfo.apiKey && (
+          <div className="aiApiPanel aiApiPanel-endpoints">
+            <div className="aiApiEndpointHeader">
+              <div className="aiApiEndpointTitle">可用接口</div>
+              <Tooltip title={aiApiCopied ? "已复制" : "复制 API 使用说明"}>
+                <Button
+                  icon={aiApiCopied ? <CheckOutlined style={{ color: "#10b981" }} /> : <CopyOutlined />}
+                  size="small"
+                  type="text"
+                  onClick={copyApiInfo}
+                />
+              </Tooltip>
+            </div>
+            <div className="aiApiEndpointScroll">
+              <div className="aiApiEndpointItem"><code>GET /api/sessions</code> — 列出已连接会话</div>
+              <div className="aiApiEndpointItem"><code>POST /api/exec</code> — 执行命令</div>
+              <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
+              <div className="aiApiEndpointItem"><code>GET /api/files</code> — 浏览目录</div>
+              <div className="aiApiEndpointItem"><code>GET /api/download</code> — 下载文件</div>
+              <div className="aiApiEndpointItem"><code>GET /api/tunnels</code> — 列出隧道模板</div>
+              <div className="aiApiEndpointItem"><code>POST /api/tunnels/create</code> — 新建隧道</div>
+              <div className="aiApiEndpointItem"><code>POST /api/tunnels/start</code> — 启动隧道</div>
+              <div className="aiApiEndpointItem"><code>POST /api/tunnels/stop</code> — 停止隧道</div>
+              <div className="aiApiEndpointItem"><code>GET /api/backup/settings</code> — 获取备份配置</div>
+              <div className="aiApiEndpointItem"><code>POST /api/backup/run</code> — 立即备份</div>
+              <div className="aiApiEndpointItem"><code>GET /api/backup/records</code> — 备份记录</div>
+            </div>
+            <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
+          </div>
+        )}
+        <div className="aiApiActions">
+          {aiApiInfo?.running ? (
+            <Button danger loading={aiApiLoading} onClick={() => void stopAiApi()}>
+              停止服务
+            </Button>
+          ) : (
+            <Button type="primary" loading={aiApiLoading} disabled={!aiApiSessionId} onClick={() => void startAiApi()}>
+              启动服务
+            </Button>
+          )}
+        </div>
+      </div>
     </Modal>
+    </>
   );
 }
 

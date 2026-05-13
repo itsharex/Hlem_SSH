@@ -1,4 +1,4 @@
-// Free up Vite's dev port (1420) before `npm run dev`.
+// Free up Vite's dev port (5177) before `npm run dev`.
 //
 // Replaces the previous PowerShell-based scripts/free-vite-port.mjs:
 // only kills processes whose command line references the current
@@ -15,7 +15,7 @@ fn main() {
 }
 
 #[cfg(windows)]
-const TARGET_PORT: u16 = 1420;
+const TARGET_PORT: u16 = 5177;
 
 #[cfg(windows)]
 fn run() -> std::io::Result<()> {

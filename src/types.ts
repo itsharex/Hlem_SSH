@@ -96,6 +96,8 @@ export interface AppSettings {
   ignoredUpdateVersions?: string[];
   aiApiKey?: string | null;
   aiApiSessionId?: string | null;
+  aiApiPort?: number | null;
+  aiApiAutoStart?: boolean;
 }
 
 export interface TerminalInputHistoryEntry {

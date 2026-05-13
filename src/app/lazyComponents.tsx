@@ -11,3 +11,28 @@ export const TopBar = lazy(() => import("../components/TopBar").then((module) =>
 export const TransferCenter = lazy(() => import("../components/TransferCenter").then((module) => ({ default: module.TransferCenter })));
 export const TunnelDrawer = lazy(() => import("../components/TunnelDrawer").then((module) => ({ default: module.TunnelDrawer })));
 
+/**
+ * 预加载核心工作区组件，避免首次连接终端时白屏闪烁。
+ * 只执行一次，后续调用直接跳过。
+ */
+let _preloaded = false;
+export function preloadWorkspaceComponents() {
+  if (_preloaded) return;
+  _preloaded = true;
+
+  const load = () => {
+    void Promise.all([
+      import("../components/TopBar"),
+      import("../components/SplitPane"),
+      import("../components/TerminalPanel"),
+      import("../components/TelemetrySidebar"),
+      import("../components/FileManager"),
+    ]);
+  };
+
+  if ("requestIdleCallback" in window) {
+    (window as unknown as { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback(load, { timeout: 2000 });
+  } else {
+    setTimeout(load, 50);
+  }
+}

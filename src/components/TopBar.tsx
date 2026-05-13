@@ -7,6 +7,7 @@ import {
   PlusOutlined,
   ProfileOutlined,
   RightOutlined,
+  RobotOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { Badge, Button, Modal, Space, Tabs, Tooltip } from "antd";
@@ -32,7 +33,8 @@ interface TopBarProps {
   sessionListOpen: boolean;
   onSessionListOpenChange: (open: boolean) => void;
   apiServerRunning: boolean;
-  onApiServerStop: () => void;
+  apiConfigured: boolean;
+  onApiServerStart: () => void;
 }
 
 export function TopBar({
@@ -52,7 +54,8 @@ export function TopBar({
   sessionListOpen,
   onSessionListOpenChange,
   apiServerRunning,
-  onApiServerStop,
+  apiConfigured,
+  onApiServerStart,
 }: TopBarProps) {
   const [sessionListPage, setSessionListPage] = useState(1);
 
@@ -94,12 +97,15 @@ export function TopBar({
           <span>HelM</span>
         </span>
         <span className="brandActions">
-          {apiServerRunning && (
-            <Tooltip title="点击关闭 AI API" placement="bottom">
-              <span className="brandApiIndicator" role="button" onClick={onApiServerStop}>
-                <span className="brandApiDot" />
-                <span className="brandApiText">API</span>
-              </span>
+          {apiConfigured && (
+            <Tooltip title={apiServerRunning ? "AI API 运行中" : "AI API 已停止"} placement="bottom">
+              <Button
+                aria-label="AI API"
+                className={`brandApiButton${apiServerRunning ? " brandApiButton-running" : " brandApiButton-stopped"}`}
+                icon={<RobotOutlined />}
+                size="small"
+                onClick={onApiServerStart}
+              />
             </Tooltip>
           )}
           <Tooltip title="设置" placement="bottom">

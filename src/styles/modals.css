@@ -2382,7 +2382,7 @@
 
 .aiApiEndpointScroll {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
   max-height: 140px;
   overflow-y: auto;
@@ -2404,7 +2404,7 @@
   font-size: 11.5px;
   color: #475569;
   line-height: 1;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
