@@ -22,8 +22,7 @@ use commands::{
     terminal_open, terminal_resize, terminal_write, transfer_cancel, transfer_download,
     transfer_pause, transfer_remove, transfer_resume, transfer_retry, transfer_upload,
     tunnel_create, tunnel_delete, tunnel_list, tunnel_update, vault_backup_export,
-    vault_backup_import, vault_change_master_password, vault_create, vault_lock, vault_status,
-    vault_unlock, AppState,
+    vault_backup_import, vault_migrate, vault_needs_migration, vault_skip_migration, AppState,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -69,18 +68,16 @@ pub fn run() {
             open_external_url,
             open_path_dir,
             frontend_ready,
-            vault_status,
-            vault_create,
-            vault_unlock,
-            vault_lock,
-            vault_change_master_password,
+            vault_needs_migration,
+            vault_migrate,
+            vault_skip_migration,
+            config_snapshot,
             vault_backup_export,
             vault_backup_import,
             backup_run_now,
             backup_record_restore,
             backup_record_delete,
             backup_records_clear,
-            config_snapshot,
             settings_update,
             group_create,
             group_update,
@@ -153,7 +150,6 @@ fn configure_main_window(app: &mut tauri::App) {
 fn create_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "tray_show", "显示主窗口", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "tray_hide", "隐藏到托盘", true, None::<&str>)?;
-    let lock = MenuItem::with_id(app, "tray_lock", "锁定工作区", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "tray_settings", "全局设置", true, None::<&str>)?;
     let backup = MenuItem::with_id(app, "tray_backup", "数据备份", true, None::<&str>)?;
     let backup_now = MenuItem::with_id(app, "tray_backup_now", "立即备份", true, None::<&str>)?;
@@ -164,7 +160,6 @@ fn create_tray(app: &mut tauri::App) -> tauri::Result<()> {
         &[
             &show,
             &hide,
-            &lock,
             &settings,
             &backup,
             &backup_now,
@@ -180,7 +175,6 @@ fn create_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray_show" => show_main_window(app),
             "tray_hide" => hide_main_window(app),
-            "tray_lock" => crate::events::emit(app, crate::events::TRAY_ACTION, "lock"),
             "tray_settings" => {
                 show_main_window(app);
                 crate::events::emit(app, crate::events::TRAY_ACTION, "settings");

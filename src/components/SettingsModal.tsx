@@ -90,9 +90,10 @@ export function SettingsModal({
   }, [form, initialValue, open]);
 
   useEffect(() => {
-    if (!aiApiOpen || !aiApiInfo?.running) return;
+    if (!aiApiOpen) return;
     const poll = () => void appApi.apiServerLogs().then(setAiApiLogs).catch(() => undefined);
     poll();
+    if (!aiApiInfo?.running) return;
     const timer = setInterval(poll, 500);
     return () => clearInterval(timer);
   }, [aiApiOpen, aiApiInfo?.running]);
@@ -607,83 +608,86 @@ export function SettingsModal({
         width={480}
       >
         <div className="aiApiContent">
-          <p className="aiApiDescription">
-            启用后将在本地启动一个 HTTP API 服务，AI 可通过 API Key 认证后执行命令、上传文件、浏览目录等操作。服务仅监听 127.0.0.1，关闭后外部无法连接。
-          </p>
-          <div className="aiApiStatusRow">
-            <span className="aiApiStatusLabel">服务状态</span>
-            <span className={`aiApiStatusBadge aiApiStatusBadge-${aiApiInfo?.running ? "running" : "stopped"}`}>
-              {aiApiInfo?.running ? "运行中" : "已停止"}
-            </span>
-            {aiApiInfo?.running && aiApiLogs.length > 0 && (
-              <Tooltip title="查看日志">
-                <Button size="small" type="link" icon={<FundProjectionScreenOutlined />} onClick={() => void openLogWindow()} />
-              </Tooltip>
-            )}
-          </div>
-          <div className="aiApiFormRow">
-            <span className="aiApiFormLabel">监听端口</span>
-            <InputNumber
-              min={1024}
-              max={65535}
-              precision={0}
-              value={aiApiPort}
-              disabled={aiApiInfo?.running}
-              onChange={(value) => value && setAiApiPort(value)}
-              style={{ width: 120 }}
-            />
-          </div>
-          <div className="aiApiFormRow">
-            <span className="aiApiFormLabel">指定会话</span>
-            <Select
-              style={{ flex: 1 }}
-              placeholder="全部会话（AI 可访问所有已连接终端）"
-              allowClear
-              disabled={aiApiInfo?.running}
-              value={aiApiSessionId}
-              onChange={(value) => void changeAiApiSession(value ?? null)}
-              options={sessions.map((s) => ({ label: s.name, value: s.id }))}
-            />
-          </div>
-          {aiApiInfo?.running && aiApiInfo.apiKey && (
-            <>
-              <div className="aiApiFormRow">
-                <span className="aiApiFormLabel">API 地址</span>
-                <Input
-                  readOnly
-                  value={`http://127.0.0.1:${aiApiInfo.port}`}
-                  style={{ flex: 1 }}
-                  onClick={(e) => (e.target as HTMLInputElement).select()}
-                />
-              </div>
-              <div className="aiApiFormRow">
-                <span className="aiApiFormLabel">API Key</span>
-                <Input.Password
-                  readOnly
-                  value={aiApiInfo.apiKey}
-                  style={{ flex: 1 }}
-                  onClick={(e) => (e.target as HTMLInputElement).select()}
-                />
-                <Tooltip title="重新生成密钥">
-                  <Button
-                    icon={<ReloadOutlined />}
-                    size="small"
-                    onClick={() => void regenerateKey()}
-                  />
+          <div className="aiApiPanel">
+            <div className="aiApiStatusRow">
+              <span className="aiApiStatusLabel">服务状态</span>
+              <span className={`aiApiStatusBadge aiApiStatusBadge-${aiApiInfo?.running ? "running" : "stopped"}`}>
+                {aiApiInfo?.running ? "运行中" : "已停止"}
+              </span>
+              {aiApiLogs.length > 0 && (
+                <Tooltip title="查看日志">
+                  <Button size="small" type="link" icon={<FundProjectionScreenOutlined />} onClick={() => void openLogWindow()} />
                 </Tooltip>
-              </div>
-              <div className="aiApiEndpoints">
-                <div className="aiApiEndpointHeader">
-                  <div className="aiApiEndpointTitle">可用接口</div>
-                  <Tooltip title={aiApiCopied ? "已复制" : "复制 API 使用说明"}>
+              )}
+            </div>
+            <div className="aiApiFormRow">
+              <span className="aiApiFormLabel">监听端口</span>
+              <InputNumber
+                min={1024}
+                max={65535}
+                precision={0}
+                value={aiApiPort}
+                disabled={aiApiInfo?.running}
+                onChange={(value) => value && setAiApiPort(value)}
+                style={{ width: 120 }}
+              />
+            </div>
+            <div className="aiApiFormRow">
+              <span className="aiApiFormLabel">指定会话</span>
+              <Select
+                style={{ flex: 1 }}
+                placeholder="全部会话（AI 可访问所有已连接终端）"
+                allowClear
+                disabled={aiApiInfo?.running}
+                value={aiApiSessionId}
+                onChange={(value) => void changeAiApiSession(value ?? null)}
+                options={sessions.map((s) => ({ label: s.name, value: s.id }))}
+              />
+            </div>
+            {aiApiInfo?.running && aiApiInfo.apiKey && (
+              <>
+                <div className="aiApiFormRow">
+                  <span className="aiApiFormLabel">API 地址</span>
+                  <Input
+                    readOnly
+                    value={`http://127.0.0.1:${aiApiInfo.port}`}
+                    style={{ flex: 1 }}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                  />
+                </div>
+                <div className="aiApiFormRow">
+                  <span className="aiApiFormLabel">API Key</span>
+                  <Input.Password
+                    readOnly
+                    value={aiApiInfo.apiKey}
+                    style={{ flex: 1 }}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                  />
+                  <Tooltip title="重新生成密钥">
                     <Button
-                      icon={aiApiCopied ? <CheckOutlined style={{ color: "#10b981" }} /> : <CopyOutlined />}
+                      icon={<ReloadOutlined />}
                       size="small"
-                      type="text"
-                      onClick={copyApiInfo}
+                      onClick={() => void regenerateKey()}
                     />
                   </Tooltip>
                 </div>
+              </>
+            )}
+          </div>
+          {aiApiInfo?.running && aiApiInfo.apiKey && (
+            <div className="aiApiPanel aiApiPanel-endpoints">
+              <div className="aiApiEndpointHeader">
+                <div className="aiApiEndpointTitle">可用接口</div>
+                <Tooltip title={aiApiCopied ? "已复制" : "复制 API 使用说明"}>
+                  <Button
+                    icon={aiApiCopied ? <CheckOutlined style={{ color: "#10b981" }} /> : <CopyOutlined />}
+                    size="small"
+                    type="text"
+                    onClick={copyApiInfo}
+                  />
+                </Tooltip>
+              </div>
+              <div className="aiApiEndpointScroll">
                 <div className="aiApiEndpointItem"><code>GET /api/sessions</code> — 列出已连接会话</div>
                 <div className="aiApiEndpointItem"><code>POST /api/exec</code> — 执行命令</div>
                 <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
@@ -696,9 +700,9 @@ export function SettingsModal({
                 <div className="aiApiEndpointItem"><code>GET /api/backup/settings</code> — 获取备份配置</div>
                 <div className="aiApiEndpointItem"><code>POST /api/backup/run</code> — 立即备份</div>
                 <div className="aiApiEndpointItem"><code>GET /api/backup/records</code> — 备份记录</div>
-                <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
               </div>
-            </>
+              <p className="aiApiEndpointNote">请求头需携带 <code>Authorization: Bearer &lt;API Key&gt;</code></p>
+            </div>
           )}
           <div className="aiApiActions">
             {aiApiInfo?.running ? (

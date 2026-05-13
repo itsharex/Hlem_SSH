@@ -6,6 +6,5 @@
 @import "./styles/workspace.css";
 @import "./styles/terminal.css";
 @import "./styles/file-manager.css";
-@import "./styles/vault.css";
 @import "./styles/session-config.css";
 @import "./styles/overrides.css";

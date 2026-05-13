@@ -4,7 +4,6 @@ import {
   DisconnectOutlined,
   EditOutlined,
   LeftOutlined,
-  LockOutlined,
   PlusOutlined,
   ProfileOutlined,
   RightOutlined,
@@ -26,7 +25,6 @@ interface TopBarProps {
   onEdit: (id: string) => void;
   onConnect: (session: RemoteSession) => void;
   onDisconnect: (session: RemoteSession) => void;
-  onLock: () => void;
   onTransferOpen: () => void;
   onSettingsOpen: () => void;
   connectingSessionId: string | null;
@@ -47,7 +45,6 @@ export function TopBar({
   onEdit,
   onConnect,
   onDisconnect,
-  onLock,
   onTransferOpen,
   onSettingsOpen,
   connectingSessionId,
@@ -111,14 +108,6 @@ export function TopBar({
               icon={<SettingOutlined />}
               size="small"
               onClick={onSettingsOpen}
-            />
-          </Tooltip>
-          <Tooltip title="锁定工作区" placement="bottom">
-            <Button
-              aria-label="锁定工作区"
-              icon={<LockOutlined />}
-              size="small"
-              onClick={onLock}
             />
           </Tooltip>
         </span>

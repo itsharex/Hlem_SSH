@@ -73,11 +73,6 @@ export interface RemoteFileEntry {
   owner: string;
 }
 
-export interface VaultStatus {
-  exists: boolean;
-  unlocked: boolean;
-}
-
 export interface ConfigSnapshot {
   data: VaultData;
 }

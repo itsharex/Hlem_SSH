@@ -23,6 +23,7 @@ pub const VAULT_FILE_NAME: &str = "vault.rpvault";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct VaultStatus {
     pub exists: bool,
     pub unlocked: bool,
@@ -45,6 +46,19 @@ impl Drop for UnlockedVault {
     }
 }
 
+/// Internal fixed password used for transparent encryption (no user-facing password gate).
+pub const AUTO_PASSWORD: &str = "helm-internal-auto-key-2024";
+
+/// Result of attempting to auto-open the vault at startup.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoOpenResult {
+    /// Vault opened successfully (or freshly created).
+    Ready,
+    /// An existing vault was found but encrypted with a user password.
+    /// Migration is needed: the user must provide their old password once.
+    NeedsMigration,
+}
+
 impl VaultStore {
     pub fn new(path: PathBuf) -> Self {
         Self {
@@ -53,6 +67,62 @@ impl VaultStore {
         }
     }
 
+    /// Automatically create or unlock the vault without user interaction.
+    /// Returns `NeedsMigration` if an existing vault is encrypted with a user password.
+    pub fn auto_open(&mut self) -> AppResult<AutoOpenResult> {
+        if !self.path.exists() {
+            self.create(AUTO_PASSWORD)?;
+            return Ok(AutoOpenResult::Ready);
+        }
+        match self.unlock(AUTO_PASSWORD) {
+            Ok(_) => {
+                // Re-encrypt with fast KDF if currently using slow params
+                self.upgrade_to_fast_kdf_if_needed();
+                Ok(AutoOpenResult::Ready)
+            }
+            Err(_) => Ok(AutoOpenResult::NeedsMigration),
+        }
+    }
+
+    /// If the vault is using slow KDF params (from a previous migration),
+    /// re-encrypt with fast params for faster startup next time.
+    fn upgrade_to_fast_kdf_if_needed(&mut self) {
+        let needs_upgrade = self
+            .unlocked
+            .as_ref()
+            .map(|u| u.crypto.is_slow())
+            .unwrap_or(false);
+        if !needs_upgrade {
+            return;
+        }
+        let data = match self.unlocked.as_ref() {
+            Some(u) => u.data.clone(),
+            None => return,
+        };
+        if let Ok((encrypted, crypto)) = crypto::encrypt_with_password_fast(AUTO_PASSWORD, &data) {
+            if write_encrypted(&self.path, &encrypted).is_ok() {
+                self.unlocked = Some(UnlockedVault { data, crypto });
+            }
+        }
+    }
+
+    /// Migrate an existing vault from a user password to the internal auto-key.
+    /// Called once when the user provides their old master password.
+    pub fn migrate(&mut self, old_password: &str) -> AppResult<ConfigSnapshot> {
+        // Decrypt with the user's old password
+        self.unlock(old_password)?;
+        // Re-encrypt with the internal auto-key (fast KDF)
+        let data = self.unlocked()?.data.clone();
+        let (encrypted, crypto) = crypto::encrypt_with_password_fast(AUTO_PASSWORD, &data)?;
+        write_encrypted(&self.path, &encrypted)?;
+        self.unlocked = Some(UnlockedVault {
+            data: data.clone(),
+            crypto,
+        });
+        Ok(ConfigSnapshot { data })
+    }
+
+    #[allow(dead_code)]
     pub fn status(&self) -> VaultStatus {
         VaultStatus {
             exists: self.path.exists(),
@@ -70,7 +140,11 @@ impl VaultStore {
         }
 
         let data = VaultData::with_default_group();
-        let (encrypted, crypto) = crypto::encrypt_with_password(master_password, &data)?;
+        let (encrypted, crypto) = if master_password == AUTO_PASSWORD {
+            crypto::encrypt_with_password_fast(master_password, &data)?
+        } else {
+            crypto::encrypt_with_password(master_password, &data)?
+        };
         write_encrypted(&self.path, &encrypted)?;
         self.unlocked = Some(UnlockedVault {
             data: data.clone(),
@@ -89,32 +163,14 @@ impl VaultStore {
         Ok(ConfigSnapshot { data })
     }
 
-    pub fn lock(&mut self) -> VaultStatus {
+    #[allow(dead_code)]
+    pub fn lock(&mut self) {
         self.unlocked = None;
-        self.status()
     }
 
     pub fn ensure_unlocked(&self) -> AppResult<()> {
         self.unlocked()?;
         Ok(())
-    }
-
-    pub fn change_master_password(
-        &mut self,
-        current_password: &str,
-        new_password: &str,
-    ) -> AppResult<ConfigSnapshot> {
-        crypto::validate_master_password(new_password)?;
-        let encrypted = read_encrypted(&self.path)?;
-        crypto::decrypt_with_password(current_password, &encrypted)?;
-        let data = self.unlocked()?.data.clone();
-        let (encrypted, crypto) = crypto::encrypt_with_password(new_password, &data)?;
-        write_encrypted(&self.path, &encrypted)?;
-        self.unlocked = Some(UnlockedVault {
-            data: data.clone(),
-            crypto,
-        });
-        Ok(ConfigSnapshot { data })
     }
 
     pub fn snapshot(&self) -> AppResult<ConfigSnapshot> {
@@ -586,17 +642,29 @@ mod tests {
     }
 
     #[test]
-    fn changes_master_password() {
+    fn migrates_vault_from_old_password() {
         let path = store_path();
         let mut store = VaultStore::new(path.clone());
         store.create("old-pass").unwrap();
-        store
-            .change_master_password("old-pass", "new-pass")
-            .unwrap();
+        store.create_session(session_input("节点A", None)).unwrap();
         store.lock();
 
-        assert!(store.unlock("old-pass").is_err());
-        assert!(store.unlock("new-pass").is_ok());
+        // Simulate app restart: auto_open detects old password
+        let mut store2 = VaultStore::new(path.clone());
+        let result = store2.auto_open().unwrap();
+        assert_eq!(result, AutoOpenResult::NeedsMigration);
+
+        // User provides old password to migrate
+        let snapshot = store2.migrate("old-pass").unwrap();
+        assert!(snapshot.data.sessions.iter().any(|s| s.name == "节点A"));
+        store2.lock();
+
+        // After migration, auto_open works without password
+        let mut store3 = VaultStore::new(path);
+        let result = store3.auto_open().unwrap();
+        assert_eq!(result, AutoOpenResult::Ready);
+        let snapshot = store3.snapshot().unwrap();
+        assert!(snapshot.data.sessions.iter().any(|s| s.name == "节点A"));
     }
 
     #[test]

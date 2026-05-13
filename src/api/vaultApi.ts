@@ -1,27 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings, BackupSettings, ConfigSnapshot, GroupInput, SessionInput, SshOptions, TunnelConfig, TunnelInput, VaultData, VaultStatus } from "../types";
+import type { AppSettings, BackupSettings, ConfigSnapshot, GroupInput, SessionInput, SshOptions, TunnelConfig, TunnelInput, VaultData } from "../types";
 import { isTauriRuntime } from "./runtime";
 
 const BROWSER_VAULT_KEY = "helm.browserVault";
 
-interface BrowserVaultRecord {
-  masterPassword: string;
-  snapshot: ConfigSnapshot;
-}
-
 export const vaultApi = {
-  status: () => call<VaultStatus>("vault_status", browserStatus),
-  create: (masterPassword: string) =>
-    call<ConfigSnapshot>("vault_create", () => browserCreate(masterPassword), { masterPassword }),
-  unlock: (masterPassword: string) =>
-    call<ConfigSnapshot>("vault_unlock", () => browserUnlock(masterPassword), { masterPassword }),
-  lock: () => call<VaultStatus>("vault_lock", browserLock),
-  changeMasterPassword: (currentPassword: string, newPassword: string) =>
-    call<ConfigSnapshot>(
-      "vault_change_master_password",
-      () => browserChangeMasterPassword(currentPassword, newPassword),
-      { currentPassword, newPassword },
-    ),
+  needsMigration: () => call<boolean>("vault_needs_migration", () => false),
+  migrate: (oldPassword: string) =>
+    call<ConfigSnapshot>("vault_migrate", () => { throw new Error("浏览器环境无需迁移"); }, { oldPassword }),
+  skipMigration: () =>
+    call<ConfigSnapshot>("vault_skip_migration", browserSkipMigration),
   snapshot: () => call<ConfigSnapshot>("config_snapshot", browserSnapshot),
   backupExport: (path: string) => call<void>("vault_backup_export", () => browserUnavailable("备份导出"), { path }),
   backupImport: (path: string) =>
@@ -64,43 +52,11 @@ function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: 
 
 let browserUnlocked: ConfigSnapshot | null = null;
 
-function browserStatus(): VaultStatus {
-  return {
-    exists: readBrowserRecord() !== null,
-    unlocked: browserUnlocked !== null,
-  };
-}
-
-function browserCreate(masterPassword: string): ConfigSnapshot {
-  if (readBrowserRecord()) {
-    throw new Error("本机数据已存在");
-  }
-  const snapshot = { data: createDefaultVaultData() };
-  writeBrowserRecord({ masterPassword, snapshot });
-  browserUnlocked = snapshot;
-  return snapshot;
-}
-
-function browserUnlock(masterPassword: string): ConfigSnapshot {
-  const record = readBrowserRecord();
-  if (!record) throw new Error("本机数据尚未初始化");
-  if (record.masterPassword !== masterPassword) throw new Error("主密码错误");
-  browserUnlocked = record.snapshot;
-  return record.snapshot;
-}
-
-function browserLock(): VaultStatus {
+function browserSkipMigration(): ConfigSnapshot {
+  // In browser mode, just reset to fresh state
+  localStorage.removeItem(BROWSER_VAULT_KEY);
   browserUnlocked = null;
-  return browserStatus();
-}
-
-function browserChangeMasterPassword(currentPassword: string, newPassword: string): ConfigSnapshot {
-  const record = readBrowserRecord();
-  if (!record) throw new Error("本机数据尚未初始化");
-  if (record.masterPassword !== currentPassword) throw new Error("主密码错误");
-  const snapshot = requireBrowserUnlocked();
-  writeBrowserRecord({ masterPassword: newPassword, snapshot });
-  return snapshot;
+  return requireBrowserUnlocked();
 }
 
 function browserSnapshot(): ConfigSnapshot {
@@ -267,27 +223,37 @@ function browserMutate(update: (data: VaultData) => void): ConfigSnapshot {
   update(snapshot.data);
   snapshot.data.updatedAt = now();
   browserUnlocked = snapshot;
-  const record = readBrowserRecord();
-  if (record) writeBrowserRecord({ ...record, snapshot });
+  writeBrowserRecord(snapshot);
   return snapshot;
 }
 
 function requireBrowserUnlocked(): ConfigSnapshot {
-  if (!browserUnlocked) throw new Error("工作区已锁定");
+  if (!browserUnlocked) {
+    // Auto-initialize browser vault
+    const stored = readBrowserRecord();
+    if (stored) {
+      browserUnlocked = stored;
+    } else {
+      browserUnlocked = { data: createDefaultVaultData() };
+      writeBrowserRecord(browserUnlocked);
+    }
+  }
   return browserUnlocked;
 }
 
-function readBrowserRecord(): BrowserVaultRecord | null {
+function readBrowserRecord(): ConfigSnapshot | null {
   const content = localStorage.getItem(BROWSER_VAULT_KEY);
   if (!content) return null;
-  const record = JSON.parse(content) as BrowserVaultRecord;
-  normalizeBrowserSnapshot(record.snapshot);
-  return record;
+  const record = JSON.parse(content) as ConfigSnapshot | { masterPassword: string; snapshot: ConfigSnapshot };
+  // Handle legacy format with masterPassword wrapper
+  const snapshot = "snapshot" in record ? record.snapshot : record;
+  normalizeBrowserSnapshot(snapshot);
+  return snapshot;
 }
 
-function writeBrowserRecord(record: BrowserVaultRecord) {
-  normalizeBrowserSnapshot(record.snapshot);
-  localStorage.setItem(BROWSER_VAULT_KEY, JSON.stringify(record));
+function writeBrowserRecord(snapshot: ConfigSnapshot) {
+  normalizeBrowserSnapshot(snapshot);
+  localStorage.setItem(BROWSER_VAULT_KEY, JSON.stringify(snapshot));
 }
 
 function normalizeBrowserSnapshot(snapshot: ConfigSnapshot) {

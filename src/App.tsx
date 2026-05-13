@@ -18,7 +18,7 @@ import {
   TransferCenter,
   TunnelDrawer,
 } from "./app/lazyComponents";
-import type { SessionModalState, VaultMode } from "./app/appTypes";
+import type { SessionModalState } from "./app/appTypes";
 import {
   appendTerminalStreamEntries,
   createNextSessionName,
@@ -38,7 +38,7 @@ import {
 import type { FileOperation } from "./components/FileManager";
 import { AppLoadingFallback } from "./components/shared/AppLoadingFallback";
 import { AppProviders } from "./components/shared/AppProviders";
-import { VaultGate } from "./components/VaultGate";
+import { MigrationGate } from "./components/MigrationGate";
 import { configToRemoteSession, createDefaultSessionInput, defaultRemoteHomePath, getErrorCode, getErrorMessage, initialRemotePath } from "./lib/configMapping";
 import {
   getBaseName as getRemoteBaseName,
@@ -78,9 +78,10 @@ const TRANSFER_HISTORY_STORAGE_KEY = "helm:transferHistory:v1";
 const TRANSFER_HISTORY_LIMIT = 100;
 
 function App() {
-  const [vaultMode, setVaultMode] = useState<VaultMode>("loading");
-  const [vaultBusy, setVaultBusy] = useState(false);
-  const [vaultError, setVaultError] = useState<string>();
+  const [appReady, setAppReady] = useState(false);
+  const [migrationNeeded, setMigrationNeeded] = useState(false);
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const [migrationError, setMigrationError] = useState<string>();
   const [configSnapshot, setConfigSnapshot] = useState<ConfigSnapshot>();
   const [sessions, setSessions] = useState<RemoteSession[]>([]);
   const [openSessionIds, setOpenSessionIds] = useState<string[]>([]);
@@ -115,7 +116,6 @@ function App() {
   const pendingTerminalEntriesRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputBuffersRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputFlushRef = useRef<number | null>(null);
-  const vaultModeRef = useRef(vaultMode);
   const configSnapshotRef = useRef<ConfigSnapshot | undefined>(configSnapshot);
   const autoBackupRunningRef = useRef(false);
   const inputHistorySaveTimerRef = useRef<number | null>(null);
@@ -133,7 +133,7 @@ function App() {
   );
 
   useEffect(() => {
-    initializeVault();
+    initializeApp();
     return () => {
       if (autoUpdateTimerRef.current !== null) {
         window.clearTimeout(autoUpdateTimerRef.current);
@@ -148,9 +148,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (vaultMode !== "ready" || !appInfo) return;
+    if (!appReady || !appInfo) return;
     scheduleAutoUpdateCheck(appInfo);
-  }, [appInfo, vaultMode]);
+  }, [appInfo, appReady]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -165,15 +165,11 @@ function App() {
   }, [transferSessionIds]);
 
   useEffect(() => {
-    vaultModeRef.current = vaultMode;
-  }, [vaultMode]);
-
-  useEffect(() => {
     configSnapshotRef.current = configSnapshot;
   }, [configSnapshot]);
 
   useEffect(() => {
-    if (vaultMode !== "ready") return;
+    if (!appReady) return;
     let disposed = false;
     let cleanups: Array<() => void> = [];
     void Promise.all([
@@ -212,18 +208,13 @@ function App() {
       disposed = true;
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [vaultMode]);
+  }, [appReady]);
 
   useEffect(() => {
-    if (vaultMode === "loading") return;
+    if (!appReady) return;
     let cleanup: (() => void) | undefined;
     let disposed = false;
     void appEvents.onTrayAction((action) => {
-      if (action === "lock") {
-        if (vaultModeRef.current === "ready") void lockVault();
-        return;
-      }
-      if (vaultModeRef.current !== "ready") return;
       if (action === "settings") setSettingsOpen(true);
       if (action === "backup") setBackupOpen(true);
       if (action === "backupNow") void runConfiguredBackup();
@@ -238,23 +229,23 @@ function App() {
       disposed = true;
       cleanup?.();
     };
-  }, [vaultMode]);
+  }, [appReady]);
 
   useEffect(() => {
-    if (vaultMode !== "ready") return;
+    if (!appReady) return;
     void remoteApi.listForwards().then(setForwards).catch(() => undefined);
-  }, [vaultMode]);
+  }, [appReady]);
 
   useEffect(() => {
-    if (vaultMode !== "ready") return;
+    if (!appReady) return;
     if (sessionModal || activeSession) return;
     if (openSessionIds.length > 0) return;
     setSessionListOpen(true);
-  }, [vaultMode, sessionModal, activeSession, openSessionIds.length]);
+  }, [appReady, sessionModal, activeSession, openSessionIds.length]);
 
   useEffect(() => {
     const snapshot = configSnapshot;
-    if (vaultMode !== "ready" || !snapshot) return;
+    if (!appReady || !snapshot) return;
     const backup = snapshot.data.settings?.backup ?? defaultBackupSettings();
     if (!backup.autoEnabled || backup.frequency === "manual") return;
     const check = () => {
@@ -270,33 +261,57 @@ function App() {
       window.clearTimeout(startupTimer);
       window.clearInterval(interval);
     };
-  }, [configSnapshot?.data.settings?.backup, configSnapshot?.data.backupRecords, vaultMode]);
+  }, [configSnapshot?.data.settings?.backup, configSnapshot?.data.backupRecords, appReady]);
 
-  async function initializeVault() {
+  async function initializeApp() {
     try {
-      const status = await vaultApi.status();
-      if (!status.exists) {
-        setVaultMode("create");
-        return;
-      }
-      if (!status.unlocked) {
-        setVaultMode("unlock");
+      const needsMigration = await vaultApi.needsMigration();
+      if (needsMigration) {
+        setMigrationNeeded(true);
+        signalFrontendReady();
         return;
       }
       applySnapshot(await vaultApi.snapshot());
     } catch (error) {
-      setVaultError(getErrorMessage(error));
-      setVaultMode("unlock");
+      console.error("[helm] Failed to load config snapshot:", error);
     } finally {
       signalFrontendReady();
       void initializeAppInfo();
     }
   }
 
+  async function handleMigrate(oldPassword: string) {
+    setMigrationBusy(true);
+    setMigrationError(undefined);
+    try {
+      const snapshot = await vaultApi.migrate(oldPassword);
+      setMigrationNeeded(false);
+      applySnapshot(snapshot);
+      void initializeAppInfo();
+    } catch (error) {
+      setMigrationError(getErrorMessage(error));
+    } finally {
+      setMigrationBusy(false);
+    }
+  }
+
+  async function handleSkipMigration() {
+    setMigrationBusy(true);
+    setMigrationError(undefined);
+    try {
+      const snapshot = await vaultApi.skipMigration();
+      setMigrationNeeded(false);
+      applySnapshot(snapshot);
+      void initializeAppInfo();
+    } catch (error) {
+      setMigrationError(getErrorMessage(error));
+    } finally {
+      setMigrationBusy(false);
+    }
+  }
+
   function signalFrontendReady() {
     if (!isTauriRuntime()) return;
-    // 让 VaultGate 先完成一次渲染/挂载，再通知后端显示窗口，
-    // 这样窗口出现时密码框已经可以立即接受输入。
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         void invoke("frontend_ready").catch(() => undefined);
@@ -434,68 +449,6 @@ function App() {
     }
   }
 
-  async function createVault(masterPassword: string) {
-    await runVaultAction(async () => {
-      applySnapshot(await vaultApi.create(masterPassword));
-    });
-  }
-
-  async function unlockVault(masterPassword: string) {
-    await runVaultAction(async () => {
-      applySnapshot(await vaultApi.unlock(masterPassword));
-    });
-  }
-
-  async function lockVault() {
-    await runVaultAction(async () => {
-      await vaultApi.lock();
-      resetWorkspaceState();
-      setVaultMode("unlock");
-    });
-  }
-
-  function resetWorkspaceState() {
-    setConfigSnapshot(undefined);
-    setSessions([]);
-    setOpenSessionIds([]);
-    setActiveSessionId("");
-    setConnectingSessionId(null);
-    setSessionModal(null);
-    setSessionListOpen(false);
-    setTransferCenterOpen(false);
-    setTransfers([]);
-    setFileSaveRecords([]);
-    setForwards([]);
-    setBackupOpen(false);
-    setSettingsOpen(false);
-    setTunnelOpen(false);
-    setFileLoadingSessionIds(new Set());
-    autoUpdateScheduledRef.current = false;
-    if (autoUpdateTimerRef.current !== null) {
-      window.clearTimeout(autoUpdateTimerRef.current);
-      autoUpdateTimerRef.current = null;
-    }
-    terminalSessionMapRef.current.clear();
-    pendingTerminalEntriesRef.current.clear();
-    clearTerminalOutputBuffers();
-    if (inputHistorySaveTimerRef.current !== null) {
-      window.clearTimeout(inputHistorySaveTimerRef.current);
-      inputHistorySaveTimerRef.current = null;
-    }
-  }
-
-  async function runVaultAction(action: () => Promise<void>) {
-    setVaultBusy(true);
-    setVaultError(undefined);
-    try {
-      await action();
-    } catch (error) {
-      setVaultError(getErrorMessage(error));
-    } finally {
-      setVaultBusy(false);
-    }
-  }
-
   function applySnapshot(snapshot: ConfigSnapshot, preferredSessionId?: string) {
     const mappedSessions = snapshot.data.sessions.map(configToRemoteSession);
     const mappedIds = mappedSessions.map((session) => session.id);
@@ -508,7 +461,7 @@ function App() {
       return validIds;
     });
     setActiveSessionId((current) => (preferredId || (mappedIds.includes(current) ? current : "")));
-    setVaultMode("ready");
+    setAppReady(true);
   }
 
   function activateSession(id: string) {
@@ -1506,13 +1459,11 @@ function App() {
     setForwards((current) => current.filter((forward) => forward.forwardId !== forwardId));
   }
 
-  const isVaultOpen = vaultMode !== "ready";
-
   return (
     <AppProviders>
       {/* 主界面始终渲染 */}
       <div className="appShell">
-          {vaultMode === "ready" ? (
+          {appReady ? (
             <Suspense fallback={<AppLoadingFallback />}>
               <>
                 <TopBar
@@ -1525,7 +1476,6 @@ function App() {
                   onEdit={(id) => editSession(id, true)}
                   onConnect={(session) => void connectSession(session)}
                   onDisconnect={(session) => void disconnectSession(session)}
-                  onLock={lockVault}
                   onTransferOpen={() => setTransferCenterOpen(true)}
                   onSettingsOpen={() => setSettingsOpen(true)}
                   connectingSessionId={connectingSessionId}
@@ -1584,17 +1534,16 @@ function App() {
           )}
       </div>
 
-      {/* Vault 弹窗叠加 */}
-      <VaultGate
-          open={isVaultOpen}
-          mode={vaultMode === "create" ? "create" : "unlock"}
-          loading={vaultBusy}
-          initializing={vaultMode === "loading"}
-          error={vaultError}
-          onCreate={createVault}
-          onUnlock={unlockVault}
-        />
-      {vaultMode === "ready" && (
+      {/* 一次性数据迁移弹窗 */}
+      <MigrationGate
+        open={migrationNeeded}
+        loading={migrationBusy}
+        error={migrationError}
+        onMigrate={handleMigrate}
+        onSkip={handleSkipMigration}
+      />
+
+      {appReady && (
           <Suspense fallback={null}>
             <TransferCenter
               open={transferCenterOpen}

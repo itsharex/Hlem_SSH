@@ -26,7 +26,7 @@ use crate::{
         ConnectionInfo, ExecResult, ForwardInfo, RemoteFileEntry, RemoteRuntime, ServerTelemetry,
         SftpInfo, TelemetryJobInfo, TerminalInfo, TransferInfo,
     },
-    vault::{VaultStatus, VaultStore, VAULT_FILE_NAME},
+    vault::{VaultStore, VAULT_FILE_NAME},
 };
 
 const VAULT_PATH_ENV: &str = "HELM_VAULT_PATH";
@@ -46,16 +46,24 @@ pub struct AppState {
     remote: RemoteRuntime,
     api_server: TokioMutex<Option<ApiServerHandle>>,
     data_dir: PathBuf,
+    needs_migration: bool,
 }
 
 impl AppState {
     pub fn new(vault_path: PathBuf) -> Self {
         let data_dir = vault_path.parent().unwrap_or(vault_path.as_path()).to_path_buf();
+        let (vault, needs_migration) = {
+            let mut store = VaultStore::new(vault_path);
+            let result = store.auto_open().unwrap_or(crate::vault::AutoOpenResult::NeedsMigration);
+            let needs_migration = result == crate::vault::AutoOpenResult::NeedsMigration;
+            (Arc::new(Mutex::new(store)), needs_migration)
+        };
         Self {
-            vault: Arc::new(Mutex::new(VaultStore::new(vault_path))),
+            vault,
             remote: RemoteRuntime::default(),
             api_server: TokioMutex::new(None),
             data_dir,
+            needs_migration,
         }
     }
 
@@ -462,41 +470,25 @@ fn sanitize_download_name(value: &str) -> String {
 }
 
 #[tauri::command]
-pub fn vault_status(state: State<'_, AppState>) -> AppResult<VaultStatus> {
-    with_store(&state, |store| Ok(store.status()))
+pub fn vault_needs_migration(state: State<'_, AppState>) -> bool {
+    state.needs_migration
 }
 
 #[tauri::command]
-pub fn vault_create(
+pub fn vault_migrate(
     state: State<'_, AppState>,
-    master_password: String,
+    old_password: String,
 ) -> AppResult<ConfigSnapshot> {
-    with_store(&state, |store| store.create(&master_password))
+    with_store(&state, |store| store.migrate(&old_password))
 }
 
 #[tauri::command]
-pub fn vault_unlock(
-    state: State<'_, AppState>,
-    master_password: String,
-) -> AppResult<ConfigSnapshot> {
-    with_store(&state, |store| store.unlock(&master_password))
-}
-
-#[tauri::command]
-pub async fn vault_lock(app: AppHandle, state: State<'_, AppState>) -> AppResult<VaultStatus> {
-    state.remote.shutdown_all(&app).await;
-    with_store(&state, |store| Ok(store.lock()))
-}
-
-#[tauri::command]
-pub fn vault_change_master_password(
-    state: State<'_, AppState>,
-    current_password: String,
-    new_password: String,
-) -> AppResult<ConfigSnapshot> {
-    with_store(&state, |store| {
-        store.change_master_password(&current_password, &new_password)
-    })
+pub fn vault_skip_migration(state: State<'_, AppState>) -> AppResult<ConfigSnapshot> {
+    let mut store = state.vault.lock().map_err(lock_poisoned)?;
+    let path = store.vault_file_path();
+    let _ = std::fs::remove_file(&path);
+    *store = crate::vault::VaultStore::new(path);
+    store.create(crate::vault::AUTO_PASSWORD)
 }
 
 #[tauri::command]

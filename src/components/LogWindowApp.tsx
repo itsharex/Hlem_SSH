@@ -7,6 +7,7 @@ import { appApi, type ApiLogEntry } from "../api/appApi";
 export function LogWindowApp() {
   const [logs, setLogs] = useState<ApiLogEntry[]>([]);
   const [copied, setCopied] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const poll = () => void appApi.apiServerLogs().then(setLogs).catch(() => undefined);
@@ -27,6 +28,15 @@ export function LogWindowApp() {
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  function copySingleLog(log: ApiLogEntry, index: number) {
+    const status = log.success ? "OK" : "ERR";
+    const text = `[${log.timestamp}] [${status}] ${log.action} | ${log.detail} | ${log.durationMs}ms`;
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 1500);
     });
   }
 
@@ -61,6 +71,16 @@ export function LogWindowApp() {
                   <span className={`aiApiLogAction aiApiLogAction-${log.action}`}>{log.action}</span>
                   <span className="aiApiLogDetail" title={log.detail}>{log.detail}</span>
                   <span className="aiApiLogDuration">{log.durationMs}ms</span>
+                  <span
+                    className={`aiApiLogCopy${copiedIndex === i ? " aiApiLogCopy-done" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    title="复制此条"
+                    onClick={() => copySingleLog(log, i)}
+                    onKeyDown={(e) => { if (e.key === "Enter") copySingleLog(log, i); }}
+                  >
+                    {copiedIndex === i ? <CheckOutlined /> : <CopyOutlined />}
+                  </span>
                 </div>
               ))}
             </div>

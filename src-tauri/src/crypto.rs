@@ -29,6 +29,14 @@ const KDF_PARAMS_CURRENT: KdfParams = KdfParams {
     parallelism: 1,
 };
 
+/// 快速 KDF 参数，用于内置密钥加密的 vault（无需抗暴力破解）。
+/// 启动解密几乎零延迟。
+const KDF_PARAMS_FAST: KdfParams = KdfParams {
+    m_cost_kib: 1024,
+    t_cost: 1,
+    parallelism: 1,
+};
+
 /// 兼容历史：早期版本写入的是 `"argon2-default"` 占位字符串，
 /// 实际派生用的是 `Argon2::default()`，对应这组参数。
 /// 升级 KDF 后必须用这组参数解开旧 vault，否则用户被锁死。
@@ -121,6 +129,14 @@ pub struct CryptoSession {
     params: KdfParams,
 }
 
+impl CryptoSession {
+    /// Returns true if this session uses KDF params significantly slower than the fast preset.
+    pub fn is_slow(&self) -> bool {
+        self.params.m_cost_kib > KDF_PARAMS_FAST.m_cost_kib * 2
+            || self.params.t_cost > KDF_PARAMS_FAST.t_cost * 2
+    }
+}
+
 pub fn encrypt_with_password(
     master_password: &str,
     data: &VaultData,
@@ -129,6 +145,22 @@ pub fn encrypt_with_password(
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
     let params = KDF_PARAMS_CURRENT;
+    let key = derive_key(master_password, &salt, &params)?;
+    let session = CryptoSession { key, salt, params };
+    let encrypted = encrypt_with_session(&session, data)?;
+    Ok((encrypted, session))
+}
+
+/// Encrypt with minimal KDF cost — used for internal auto-key vaults
+/// where brute-force resistance is unnecessary.
+pub fn encrypt_with_password_fast(
+    master_password: &str,
+    data: &VaultData,
+) -> AppResult<(EncryptedVault, CryptoSession)> {
+    validate_master_password(master_password)?;
+    let mut salt = [0u8; SALT_LEN];
+    OsRng.fill_bytes(&mut salt);
+    let params = KDF_PARAMS_FAST;
     let key = derive_key(master_password, &salt, &params)?;
     let session = CryptoSession { key, salt, params };
     let encrypted = encrypt_with_session(&session, data)?;
