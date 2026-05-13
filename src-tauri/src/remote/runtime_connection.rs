@@ -67,9 +67,11 @@ impl RemoteRuntime {
         );
 
         let mut config = client::Config::default();
-        config.inactivity_timeout = Some(Duration::from_millis(
-            session.ssh.connect_timeout_ms.max(1_000),
-        ));
+        // Do NOT set inactivity_timeout here. The previous value (connect_timeout_ms, ~10s)
+        // was shorter than keepalive_interval (30s), causing russh to garbage-collect idle
+        // connections before a keepalive could be sent. Setting it to None lets the
+        // keepalive mechanism alone decide connection liveness.
+        config.inactivity_timeout = None;
         config.keepalive_interval = Some(Duration::from_secs(
             session.ssh.keepalive_interval_sec.max(1) as u64,
         ));

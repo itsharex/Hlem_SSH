@@ -667,7 +667,7 @@ export function SettingsModal({
             />
           </div>
           <div className="aiApiFormRow">
-            <span className="aiApiFormLabel">随应用启动</span>
+            <span className="aiApiFormLabel">自动启动</span>
             <Switch
               checked={aiApiAutoStart}
               disabled={!aiApiSessionId}

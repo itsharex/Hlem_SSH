@@ -463,6 +463,7 @@ function App() {
     const mappedSessions = snapshot.data.sessions.map(configToRemoteSession);
     const mappedIds = mappedSessions.map((session) => session.id);
     const preferredId = preferredSessionId && mappedIds.includes(preferredSessionId) ? preferredSessionId : "";
+    configSnapshotRef.current = snapshot;
     setConfigSnapshot(snapshot);
     setSessions(mappedSessions);
     setOpenSessionIds((current) => {
