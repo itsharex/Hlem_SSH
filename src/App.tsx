@@ -476,6 +476,11 @@ function App() {
     preloadWorkspaceComponents();
   }
 
+  function applyConfigSnapshot(snapshot: ConfigSnapshot) {
+    configSnapshotRef.current = snapshot;
+    setConfigSnapshot(snapshot);
+  }
+
   function activateSession(id: string) {
     setOpenSessionIds((current) => (current.includes(id) ? current : [...current, id]));
     setActiveSessionId(id);
@@ -1400,13 +1405,13 @@ function App() {
 
   async function saveSettings(settings: AppSettings) {
     const snapshot = await vaultApi.settingsUpdate(settings);
-    setConfigSnapshot(snapshot);
+    applyConfigSnapshot(snapshot);
     setSettingsOpen(false);
   }
 
   async function saveBackupSettings(settings: AppSettings) {
     const snapshot = await vaultApi.settingsUpdate(settings);
-    setConfigSnapshot(snapshot);
+    applyConfigSnapshot(snapshot);
   }
 
   async function saveQuickCommands(nextCommands: AppSettings["quickCommands"]) {
@@ -1416,7 +1421,7 @@ function App() {
       backup: configSnapshot.data.settings.backup ?? defaultBackupSettings(),
       quickCommands: nextCommands ?? [],
     });
-    setConfigSnapshot(snapshot);
+    applyConfigSnapshot(snapshot);
   }
 
   function saveTerminalInputHistory(history: AppSettings["terminalInputHistory"]) {
@@ -1630,6 +1635,7 @@ function App() {
               onBackupOpen={() => setBackupOpen(true)}
               onTunnelOpen={() => setTunnelOpen(true)}
               onApiServerChange={setApiServerRunning}
+              onSettingsChange={applyConfigSnapshot}
               aiApiOpen={aiApiOpen}
               onAiApiOpenChange={setAiApiOpen}
               appInfo={appInfo}

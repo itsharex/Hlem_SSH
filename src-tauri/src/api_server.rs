@@ -271,6 +271,8 @@ struct ExecResponse {
     exit_code: i32,
     stdout: String,
     stderr: String,
+    timed_out: bool,
+    duration_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -363,7 +365,7 @@ async fn exec_command(
     match result {
         Ok(ref r) => {
             let detail = if body.command.len() > 80 { format!("{}...", &body.command[..77]) } else { body.command.clone() };
-            push_log(&state, "exec", &detail, r.exit_status.unwrap_or(0) == 0, elapsed).await;
+            push_log(&state, "exec", &detail, !r.timed_out && r.exit_status.unwrap_or(1) == 0, elapsed).await;
         }
         Err(ref e) => {
             let detail = friendly_error_detail(&format!("{} → {}", body.command, e), &state);
@@ -374,9 +376,11 @@ async fn exec_command(
     let result = result.map_err(|e| map_remote_error(e.to_string(), &state))?;
 
     Ok(Json(ExecResponse {
-        exit_code: result.exit_status.unwrap_or(0) as i32,
+        exit_code: result.exit_status.unwrap_or(1) as i32,
         stdout: result.stdout,
         stderr: result.stderr,
+        timed_out: result.timed_out,
+        duration_ms: result.duration_ms as u64,
     }))
 }
 

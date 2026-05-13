@@ -57,13 +57,15 @@ pub(super) async fn exec_with_handle(
     timeout_ms: u64,
 ) -> AppResult<ExecResult> {
     let started = Instant::now();
-    let mut channel = {
-        let handle = handle.lock().await;
-        handle.channel_open_session().await.map_err(remote_error)?
-    };
-    channel.exec(true, command).await.map_err(remote_error)?;
-
+    let timeout_duration = Duration::from_millis(timeout_ms.max(1));
     let future = async {
+        let channel = {
+            let handle = handle.lock().await;
+            handle.channel_open_session().await.map_err(remote_error)?
+        };
+        let mut channel = AutoClosingChannel::new(channel);
+        channel.exec(command).await.map_err(remote_error)?;
+
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_status = None;
@@ -75,23 +77,54 @@ pub(super) async fn exec_with_handle(
                 _ => {}
             }
         }
-        (stdout, stderr, exit_status)
+        Ok::<_, AppError>((stdout, stderr, exit_status))
     };
 
-    match timeout(Duration::from_millis(timeout_ms.max(1)), future).await {
-        Ok((stdout, stderr, exit_status)) => Ok(ExecResult {
+    match timeout(timeout_duration, future).await {
+        Ok(Ok((stdout, stderr, exit_status))) => Ok(ExecResult {
             stdout: String::from_utf8_lossy(&stdout).to_string(),
             stderr: String::from_utf8_lossy(&stderr).to_string(),
             exit_status,
             duration_ms: started.elapsed().as_millis(),
             timed_out: false,
         }),
+        Ok(Err(error)) => Err(error),
         Err(_) => Ok(ExecResult {
             stdout: String::new(),
             stderr: "命令执行超时".to_string(),
-            exit_status: None,
+            exit_status: Some(124),
             duration_ms: started.elapsed().as_millis(),
             timed_out: true,
         }),
+    }
+}
+
+struct AutoClosingChannel(Option<Channel<client::Msg>>);
+
+impl AutoClosingChannel {
+    fn new(channel: Channel<client::Msg>) -> Self {
+        Self(Some(channel))
+    }
+
+    async fn exec(&self, command: String) -> Result<(), russh::Error> {
+        self.0
+            .as_ref()
+            .expect("channel exists until drop")
+            .exec(true, command)
+            .await
+    }
+
+    async fn wait(&mut self) -> Option<ChannelMsg> {
+        self.0.as_mut()?.wait().await
+    }
+}
+
+impl Drop for AutoClosingChannel {
+    fn drop(&mut self) {
+        if let Some(channel) = self.0.take() {
+            tokio::spawn(async move {
+                let _ = channel.close().await;
+            });
+        }
     }
 }

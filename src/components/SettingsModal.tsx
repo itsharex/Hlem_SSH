@@ -2,7 +2,7 @@ import { ApartmentOutlined, ApiOutlined, AppleOutlined, CheckCircleOutlined, Che
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Tooltip, Typography, message } from "antd";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import type { AppInfo, AppSettings, UpdateInfo } from "../types";
+import type { AppInfo, AppSettings, ConfigSnapshot, UpdateInfo } from "../types";
 import { appApi, type ApiServerInfo, type ApiLogEntry } from "../api/appApi";
 import { vaultApi } from "../api/vaultApi";
 
@@ -15,6 +15,7 @@ interface SettingsModalProps {
   onBackupOpen: () => void;
   onTunnelOpen: () => void;
   onApiServerChange: (running: boolean) => void;
+  onSettingsChange: (snapshot: ConfigSnapshot) => void;
   aiApiOpen: boolean;
   onAiApiOpenChange: (open: boolean) => void;
   appInfo: AppInfo | null;
@@ -49,6 +50,7 @@ export function SettingsModal({
   onBackupOpen,
   onTunnelOpen,
   onApiServerChange,
+  onSettingsChange,
   aiApiOpen,
   onAiApiOpenChange,
   appInfo,
@@ -137,8 +139,12 @@ export function SettingsModal({
       const info = await appApi.apiServerStart(aiApiPort, aiApiSessionId);
       setAiApiInfo(info);
       onApiServerChange(true);
-      // 持久化端口配置
-      await vaultApi.settingsUpdate({ ...initialValue, aiApiPort, aiApiSessionId, aiApiAutoStart }).catch(() => undefined);
+      await persistAiApiSettings({
+        aiApiKey: info.apiKey,
+        aiApiPort: info.port || aiApiPort,
+        aiApiSessionId,
+        aiApiAutoStart,
+      }).catch(() => undefined);
     } catch (error) {
       Modal.error({ title: "启动 API 服务失败", content: String(error) });
     } finally {
@@ -171,9 +177,14 @@ export function SettingsModal({
 
   async function changeAiApiSession(sessionId: string | null) {
     setAiApiSessionId(sessionId);
-    // Persist silently without triggering parent state update
+    const nextAutoStart = sessionId ? aiApiAutoStart : false;
+    if (!sessionId) setAiApiAutoStart(false);
     try {
-      await vaultApi.settingsUpdate({ ...initialValue, aiApiSessionId: sessionId, aiApiPort, aiApiAutoStart });
+      await persistAiApiSettings({
+        aiApiSessionId: sessionId,
+        aiApiPort,
+        aiApiAutoStart: nextAutoStart,
+      });
       const sessionName = sessions.find((s) => s.id === sessionId)?.name;
       message.success(sessionId ? `已切换至「${sessionName}」` : "已清除会话限制");
     } catch {
@@ -194,12 +205,26 @@ export function SettingsModal({
   async function changeAiApiAutoStart(checked: boolean) {
     setAiApiAutoStart(checked);
     try {
-      await vaultApi.settingsUpdate({ ...initialValue, aiApiAutoStart: checked, aiApiSessionId, aiApiPort });
+      await persistAiApiSettings({ aiApiAutoStart: checked, aiApiSessionId, aiApiPort });
       message.success(checked ? "已开启随应用自动启动" : "已关闭自动启动");
     } catch {
       message.error("保存失败");
       setAiApiAutoStart(!checked);
     }
+  }
+
+  async function persistAiApiSettings(overrides: Partial<AppSettings>) {
+    const nextSettings: AppSettings = {
+      ...initialValue,
+      aiApiKey: (aiApiInfo?.apiKey || initialValue.aiApiKey) ?? null,
+      aiApiSessionId,
+      aiApiPort,
+      aiApiAutoStart,
+      ...overrides,
+    };
+    const snapshot = await vaultApi.settingsUpdate(nextSettings);
+    onSettingsChange(snapshot);
+    return snapshot;
   }
 
   async function openLogWindow() {
@@ -256,7 +281,7 @@ export function SettingsModal({
       `| 接口 | 说明 | 参数 |`,
       `|------|------|------|`,
       `| GET /api/sessions | 列出已连接会话 | — |`,
-      `| POST /api/exec | 执行命令 | {sessionId, command, timeoutMs?} → {exitCode, stdout, stderr} |`,
+      `| POST /api/exec | 执行命令 | {sessionId, command, timeoutMs?} → {exitCode, stdout, stderr, timedOut, durationMs} |`,
       `| POST /api/upload | 上传文件 | multipart: sessionId, remotePath, file |`,
       `| GET /api/files | 浏览目录 | ?sessionId=&path= → [{name, path, fileType, size}] |`,
       `| GET /api/download | 下载文件 | ?sessionId=&path= → 二进制流 |`,

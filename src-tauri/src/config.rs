@@ -124,6 +124,10 @@ pub struct AppSettings {
     pub ai_api_key: Option<String>,
     #[serde(default)]
     pub ai_api_session_id: Option<String>,
+    #[serde(default)]
+    pub ai_api_port: Option<u16>,
+    #[serde(default)]
+    pub ai_api_auto_start: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
