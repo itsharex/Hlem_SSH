@@ -536,3 +536,67 @@
   gap: 10px;
 }
 
+
+/* ─── Delete Confirm Modal ──────────────────────────────────────────────── */
+.deleteConfirmModal .ant-modal-content {
+  border-radius: 16px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.deleteConfirmModal .ant-modal-body {
+  padding: 0;
+}
+
+.deleteConfirmContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 28px 24px;
+  text-align: center;
+}
+
+.deleteConfirmIcon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(239, 68, 68, .1) 0%, rgba(220, 38, 38, .15) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #ef4444;
+  margin-bottom: 16px;
+}
+
+.deleteConfirmTitle {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+
+.deleteConfirmDesc {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0 0 24px;
+  line-height: 1.6;
+}
+
+.deleteConfirmDesc strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.deleteConfirmActions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.deleteConfirmActions .ant-btn {
+  flex: 1;
+  height: 36px;
+  border-radius: 8px;
+  font-weight: 600;
+}

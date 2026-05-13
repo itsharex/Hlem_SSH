@@ -497,6 +497,23 @@ function App() {
     setSessionModal({ mode: "edit", sessionId: id, input: sessionConfigToInput(config) });
   }
 
+  async function deleteSession(id: string) {
+    // 如果该会话正在连接中或已连接，先关闭
+    const session = sessions.find((s) => s.id === id);
+    if (session?.connectionId) {
+      await teardownSession(session).catch(() => undefined);
+    }
+    // 从打开的 tab 中移除
+    setOpenSessionIds((current) => {
+      const next = current.filter((item) => item !== id);
+      if (activeSessionId === id) setActiveSessionId(next[0] ?? "");
+      return next;
+    });
+    // 从 vault 中删除
+    const snapshot = await vaultApi.sessionDelete(id);
+    applySnapshot(snapshot);
+  }
+
   async function saveSessionConfig(input: SessionInput) {
     if (!configSnapshot || !sessionModal) return;
     const namedInput = {
@@ -1484,6 +1501,7 @@ function App() {
                   onAdd={() => void addSession(true)}
                   onClose={closeSession}
                   onEdit={(id) => editSession(id, true)}
+                  onDelete={(id) => void deleteSession(id)}
                   onConnect={(session) => void connectSession(session)}
                   onDisconnect={(session) => void disconnectSession(session)}
                   onTransferOpen={() => setTransferCenterOpen(true)}

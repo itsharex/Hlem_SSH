@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   AppstoreOutlined,
+  DeleteOutlined,
   DisconnectOutlined,
   EditOutlined,
   LeftOutlined,
@@ -24,6 +25,7 @@ interface TopBarProps {
   onAdd: () => void;
   onClose: (id: string) => void;
   onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
   onConnect: (session: RemoteSession) => void;
   onDisconnect: (session: RemoteSession) => void;
   onTransferOpen: () => void;
@@ -45,6 +47,7 @@ export function TopBar({
   onAdd,
   onClose,
   onEdit,
+  onDelete,
   onConnect,
   onDisconnect,
   onTransferOpen,
@@ -58,6 +61,7 @@ export function TopBar({
   onApiServerStart,
 }: TopBarProps) {
   const [sessionListPage, setSessionListPage] = useState(1);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
   const sessionListPageCount = Math.max(1, Math.ceil(sessions.length / SESSIONS_PER_PAGE));
   const activeTransferTotal = activeTransferCount(transfers);
@@ -268,6 +272,18 @@ export function TopBar({
                       }}
                     />
                   </Tooltip>
+                  <Tooltip title="删除">
+                    <Button
+                      aria-label={`删除 ${session.name}`}
+                      icon={<DeleteOutlined />}
+                      size="small"
+                      danger
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setDeleteConfirm({ id: session.id, name: session.name });
+                      }}
+                    />
+                  </Tooltip>
                 </span>
               </div>
             );
@@ -296,6 +312,41 @@ export function TopBar({
             />
           </div>
         )}
+      </Modal>
+      <Modal
+        open={!!deleteConfirm}
+        title={null}
+        footer={null}
+        closable={false}
+        centered
+        width={360}
+        className="deleteConfirmModal"
+        onCancel={() => setDeleteConfirm(null)}
+      >
+        <div className="deleteConfirmContent">
+          <div className="deleteConfirmIcon">
+            <DeleteOutlined />
+          </div>
+          <h3 className="deleteConfirmTitle">确认删除</h3>
+          <p className="deleteConfirmDesc">
+            确定要删除会话「<strong>{deleteConfirm?.name}</strong>」吗？此操作不可撤销。
+          </p>
+          <div className="deleteConfirmActions">
+            <Button onClick={() => setDeleteConfirm(null)}>取消</Button>
+            <Button
+              danger
+              type="primary"
+              onClick={() => {
+                if (deleteConfirm) {
+                  onDelete(deleteConfirm.id);
+                  setDeleteConfirm(null);
+                }
+              }}
+            >
+              删除
+            </Button>
+          </div>
+        </div>
       </Modal>
     </header>
   );
