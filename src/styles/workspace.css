@@ -499,6 +499,17 @@
   padding: 0;
 }
 
+.terminalLayer {
+  height: 100%;
+  width: 100%;
+  position: relative;
+}
+
+.terminalSlot {
+  height: 100%;
+  width: 100%;
+}
+
 .splitPane {
   display: grid;
   grid-template-rows: auto 8px minmax(0, 1fr);

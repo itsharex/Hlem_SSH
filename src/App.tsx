@@ -1529,15 +1529,25 @@ function App() {
                         minTop={240}
                         minBottom={220}
                         top={
-                          <TerminalPanel
-                            session={activeSession}
-                            inputHistory={currentSettings.terminalInputHistory ?? []}
-                            onSendData={(data) => void sendTerminalData(data)}
-                            onSendCommand={(command) => void sendTerminalCommand(command)}
-                            onResize={(cols, rows) => void resizeTerminal(activeSession.terminalId, cols, rows)}
-                            onClear={clearActiveTerminal}
-                            onInputHistoryChange={saveTerminalInputHistory}
-                          />
+                          <div className="terminalLayer">
+                            {openSessions.map((sess) => (
+                              <div
+                                key={sess.id}
+                                className="terminalSlot"
+                                style={{ display: sess.id === activeSession.id ? "block" : "none" }}
+                              >
+                                <TerminalPanel
+                                  session={sess}
+                                  inputHistory={currentSettings.terminalInputHistory ?? []}
+                                  onSendData={(data) => void sendTerminalData(data)}
+                                  onSendCommand={(command) => void sendTerminalCommand(command)}
+                                  onResize={(cols, rows) => void resizeTerminal(sess.terminalId, cols, rows)}
+                                  onClear={clearActiveTerminal}
+                                  onInputHistoryChange={saveTerminalInputHistory}
+                                />
+                              </div>
+                            ))}
+                          </div>
                         }
                         bottom={
                           <FileManager
