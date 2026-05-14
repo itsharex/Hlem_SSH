@@ -46,6 +46,8 @@ pub struct ApiLogEntry {
     pub detail: String,
     pub success: bool,
     pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<String>,
 }
 
 const MAX_LOG_ENTRIES: usize = 100;
@@ -188,12 +190,17 @@ fn verify_session_access(state: &ApiServerState, session_id: &str) -> Result<(),
 }
 
 async fn push_log(state: &ApiServerState, action: &str, detail: &str, success: bool, duration_ms: u64) {
+    push_log_with_response(state, action, detail, success, duration_ms, None).await;
+}
+
+async fn push_log_with_response(state: &ApiServerState, action: &str, detail: &str, success: bool, duration_ms: u64, response: Option<String>) {
     let entry = ApiLogEntry {
         timestamp: Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         action: action.to_string(),
         detail: detail.to_string(),
         success,
         duration_ms,
+        response,
     };
     let mut logs = state.logs.write().await;
     logs.push(entry);
@@ -246,6 +253,37 @@ fn friendly_error_detail(detail: &str, state: &ApiServerState) -> String {
     } else {
         detail.to_string()
     }
+}
+
+/// Truncate stdout/stderr for log storage (max 2000 chars combined).
+fn truncate_response(stdout: &str, stderr: &str) -> String {
+    const MAX_LEN: usize = 2000;
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        let stdout_trimmed = stdout.trim();
+        if stdout_trimmed.len() > MAX_LEN {
+            result.push_str(&stdout_trimmed[..MAX_LEN]);
+            result.push_str("...(truncated)");
+        } else {
+            result.push_str(stdout_trimmed);
+        }
+    }
+    if !stderr.is_empty() {
+        let stderr_trimmed = stderr.trim();
+        if !result.is_empty() {
+            result.push_str("\n[stderr] ");
+        } else {
+            result.push_str("[stderr] ");
+        }
+        let remaining = MAX_LEN.saturating_sub(result.len());
+        if stderr_trimmed.len() > remaining {
+            result.push_str(&stderr_trimmed[..remaining]);
+            result.push_str("...(truncated)");
+        } else {
+            result.push_str(stderr_trimmed);
+        }
+    }
+    result
 }
 
 // ─── Response types ────────────────────────────────────────────────────────────
@@ -365,7 +403,8 @@ async fn exec_command(
     match result {
         Ok(ref r) => {
             let detail = if body.command.len() > 80 { format!("{}...", &body.command[..77]) } else { body.command.clone() };
-            push_log(&state, "exec", &detail, !r.timed_out && r.exit_status.unwrap_or(1) == 0, elapsed).await;
+            let response = truncate_response(&r.stdout, &r.stderr);
+            push_log_with_response(&state, "exec", &detail, !r.timed_out && r.exit_status.unwrap_or(1) == 0, elapsed, Some(response)).await;
         }
         Err(ref e) => {
             let detail = friendly_error_detail(&format!("{} → {}", body.command, e), &state);

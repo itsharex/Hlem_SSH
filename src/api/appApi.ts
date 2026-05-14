@@ -19,6 +19,7 @@ export type ApiLogEntry = {
   detail: string;
   success: boolean;
   durationMs: number;
+  response?: string | null;
 };
 
 type GitHubRelease = {
