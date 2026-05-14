@@ -67,7 +67,7 @@ export function LogWindowApp() {
             <div className="logWindowList">
               {reversed.map((log, i) => (
                 <div key={i} className={`aiApiLogItem aiApiLogItem-${log.success ? "ok" : "err"}`}>
-                  <span className="aiApiLogTime">{log.timestamp.slice(11)}</span>
+                  <span className="aiApiLogTime">{formatLogTime(log.timestamp)}</span>
                   <span className={`aiApiLogAction aiApiLogAction-${log.action}`}>{log.action}</span>
                   <span className="aiApiLogDetail" title={log.detail}>{log.detail}</span>
                   <span className="aiApiLogDuration">{log.durationMs}ms</span>
@@ -89,4 +89,15 @@ export function LogWindowApp() {
       </div>
     </ConfigProvider>
   );
+}
+
+/** 将 UTC ISO 时间戳转为北京时间，格式：MM-DD HH:mm:ss */
+function formatLogTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  // 使用 zh-CN locale 自动输出北京时间
+  const month = String(date.toLocaleString("zh-CN", { month: "2-digit", timeZone: "Asia/Shanghai" }));
+  const day = String(date.toLocaleString("zh-CN", { day: "2-digit", timeZone: "Asia/Shanghai" }));
+  const time = date.toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Asia/Shanghai" });
+  return `${month}-${day} ${time}`;
 }

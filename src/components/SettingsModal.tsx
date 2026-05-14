@@ -185,20 +185,24 @@ export function SettingsModal({
         aiApiPort,
         aiApiAutoStart: nextAutoStart,
       });
-      const sessionName = sessions.find((s) => s.id === sessionId)?.name;
-      message.success(sessionId ? `已切换至「${sessionName}」` : "已清除会话限制");
     } catch {
       message.error("保存失败");
+      return;
     }
-    // If server is running, restart with new session filter
+    // If server is running, silently restart with new session filter
     if (aiApiInfo?.running) {
       try {
         await appApi.apiServerStop();
         const info = await appApi.apiServerStart(aiApiPort, sessionId);
         setAiApiInfo(info);
+        const sessionName = sessions.find((s) => s.id === sessionId)?.name;
+        message.success(sessionId ? `已切换至「${sessionName}」，API 已重启` : "已清除会话限制，API 已重启");
       } catch (error) {
-        Modal.error({ title: "重启 API 服务失败", content: String(error) });
+        message.error(`重启 API 服务失败: ${String(error)}`);
       }
+    } else {
+      const sessionName = sessions.find((s) => s.id === sessionId)?.name;
+      message.success(sessionId ? `已切换至「${sessionName}」` : "已清除会话限制");
     }
   }
 
@@ -369,7 +373,7 @@ export function SettingsModal({
               SSH 隧道管理
             </Button>
             <Button block icon={<ApiOutlined />} onClick={() => { onAiApiOpenChange(true); void refreshAiApiStatus(); }}>
-              AI 接入
+              AI API 控制
             </Button>
             <Button block icon={<InfoCircleOutlined />} onClick={() => setAboutOpen(true)}>
               关于版本
@@ -647,7 +651,7 @@ export function SettingsModal({
     </Modal>
     <Modal
       open={aiApiOpen}
-      title="AI 接入"
+      title="AI API 控制"
       className="aiApiModal"
       footer={null}
       onCancel={() => onAiApiOpenChange(false)}
@@ -685,7 +689,6 @@ export function SettingsModal({
               style={{ flex: 1 }}
               placeholder="全部会话（AI 可访问所有已连接终端）"
               allowClear
-              disabled={aiApiInfo?.running}
               value={aiApiSessionId}
               onChange={(value) => void changeAiApiSession(value ?? null)}
               options={sessions.map((s) => ({ label: s.name, value: s.id }))}
