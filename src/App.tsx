@@ -49,6 +49,7 @@ import {
 } from "./lib/path";
 import { createEmptyTelemetry } from "./lib/remoteDefaults";
 import { createTerminalEntry } from "./lib/session";
+import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "./lib/editorChannel";
 import type {
   ConfigSnapshot,
   AppSettings,
@@ -598,6 +599,10 @@ function App() {
         files: [],
         terminal: [...item.terminal, createTerminalEntry("system", "连接已断开")],
       }));
+      // 通知编辑器窗口该 session 已断开
+      const ch = new BroadcastChannel(editorChannelName(GLOBAL_EDITOR_CHANNEL));
+      ch.postMessage({ type: "sessionDisconnected", sessionId: session.id } satisfies EditorChannelMessage);
+      ch.close();
     } catch (error) {
       appendTerminal(session.id, "error", formatSessionError(error, session));
     }
@@ -831,6 +836,10 @@ function App() {
       current.map((session) => {
         if (session.id !== payload.sessionId) return session;
         if (payload.status === "disconnected") {
+          // 通知编辑器窗口该 session 已断开
+          const ch = new BroadcastChannel(editorChannelName(GLOBAL_EDITOR_CHANNEL));
+          ch.postMessage({ type: "sessionDisconnected", sessionId: session.id } satisfies EditorChannelMessage);
+          ch.close();
           return {
             ...session,
             state: "disconnected",
@@ -1264,6 +1273,7 @@ function App() {
     if (queuedTransfers.filter(Boolean).length > 1) setTransferCenterOpen(true);
   }
 
+  let lastDownloadDir = "";
   async function downloadRemoteFile(remotePath: string, fileName: string) {
     const session = activeSession;
     if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
@@ -1277,13 +1287,39 @@ function App() {
     setTransferCenterOpen(true);
   }
 
-  async function readRemoteText(path: string) {
+  async function downloadRemoteFiles(files: { remotePath: string; fileName: string }[]) {
     const session = activeSession;
+    if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({
+      title: "选择下载目录",
+      directory: true,
+      defaultPath: lastDownloadDir || undefined,
+    });
+    if (!dir) return;
+    lastDownloadDir = dir as string;
+    for (const f of files) {
+      const localPath = `${lastDownloadDir}/${f.fileName}`;
+      upsertTransfer(await remoteApi.download(session.sftpId, f.remotePath, localPath, true));
+    }
+    setTransferCenterOpen(true);
+  }
+
+  function resolveSession(sessionId?: string) {
+    if (sessionId) {
+      const s = sessions.find((s) => s.id === sessionId);
+      if (s) return s;
+    }
+    return activeSession;
+  }
+
+  async function readRemoteText(path: string, sessionId?: string) {
+    const session = resolveSession(sessionId);
     if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
     return remoteApi.readText(session.sftpId, path);
   }
 
-  async function writeRemoteText(path: string, content: string) {
+  async function writeRemoteText(path: string, content: string, sessionId?: string) {
     const recordId = crypto.randomUUID();
     upsertFileSaveRecord({
       id: recordId,
@@ -1296,7 +1332,7 @@ function App() {
       savedAt: new Date().toISOString(),
     });
     try {
-      await writeRemoteTextRaw(path, content);
+      await writeRemoteTextRaw(path, content, sessionId);
       updateFileSaveRecord(recordId, { status: "success", error: null, savedAt: new Date().toISOString() });
     } catch (error) {
       updateFileSaveRecord(recordId, { status: "failed", error: getErrorMessage(error), savedAt: new Date().toISOString() });
@@ -1305,8 +1341,8 @@ function App() {
     }
   }
 
-  async function writeRemoteTextRaw(path: string, content: string) {
-    const session = activeSession;
+  async function writeRemoteTextRaw(path: string, content: string, sessionId?: string) {
+    const session = resolveSession(sessionId);
     if (!session?.sftpId) throw new Error("当前 SFTP 不可用");
     await remoteApi.writeText(session.sftpId, path, content);
     await refreshFiles(session.sftpId, remoteSessionPath(session), session.id);
@@ -1559,6 +1595,7 @@ function App() {
                             onFileOperation={runFileOperation}
                             onUploadFiles={uploadLocalFiles}
                             onDownloadFile={downloadRemoteFile}
+                            onDownloadFiles={downloadRemoteFiles}
                             onReadText={readRemoteText}
                             onWriteText={writeRemoteText}
                             onSendCommand={sendTerminalCommand}
@@ -1618,6 +1655,7 @@ function App() {
                 void vaultApi.backupRecordsClear().then(setConfigSnapshot);
               }}
               onUploadFiles={(paths) => void uploadLocalFiles(paths, activeSession?.currentPath ?? "/")}
+              onOpenDir={(dir) => void openPathDir(dir)}
             />
           </Suspense>
       )}

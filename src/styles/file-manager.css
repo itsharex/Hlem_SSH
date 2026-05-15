@@ -1,4 +1,27 @@
 /* ─── File Manager ──────────────────────────────────────────────────────── */
+
+.deleteConfirmList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: #f9f9fb;
+  border-radius: 6px;
+  border: 1px solid #eee;
+}
+.deleteConfirmList::-webkit-scrollbar {
+  width: 4px;
+}
+.deleteConfirmList::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.deleteConfirmList:hover::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+}
+
 .filePanel {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -310,6 +333,23 @@
   background: #fbfdff;
 }
 
+.fileEditorModal .ant-tabs {
+  margin: 0 16px;
+}
+
+.fileEditorModal .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.fileEditorModal .ant-tabs-tab {
+  padding: 6px 12px !important;
+  font-size: 13px;
+}
+
+.fileEditorModal .ant-tabs-nav::before {
+  border-bottom: 1px solid #eef2f7;
+}
+
 .fileEditorSaveButton,
 .editorPrimarySaveButton {
   height: 32px !important;
@@ -357,17 +397,36 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px;
-  border-bottom: 1px solid #eef2f7;
-  background: #f8fafc;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e8ecf0;
+  background: linear-gradient(to bottom, #fafbfd, #f4f6f9);
+}
+
+.codeEditorToolbar .ant-btn-sm {
+  border-radius: 2px;
+  border-color: #d9dfe6;
+  color: #595959;
+  transition: all 0.2s;
+}
+
+.codeEditorToolbar .ant-btn-sm:hover:not(:disabled) {
+  border-color: #4f6ef7;
+  color: #4f6ef7;
+  background: #f0f5ff;
+}
+
+.codeEditorToolbar .ant-btn-sm:disabled {
+  opacity: 0.4;
 }
 
 .codeEditorInput {
   width: 150px;
+  border-radius: 2px;
 }
 
 .codeEditorLineInput {
   width: 78px;
+  border-radius: 2px;
 }
 
 .codeEditorShell .cm-editor {
@@ -496,6 +555,123 @@
 .detachedEditorLoading {
   display: grid;
   place-items: center;
+}
+
+.detachedEditorBody {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detachedEditorContent {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detachedEditorTabs {
+  margin: 0 12px;
+}
+
+.detachedEditorTabs .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.detachedEditorTabs .ant-tabs-nav::before {
+  border-bottom: none;
+}
+
+.detachedEditorTabs .ant-tabs-tab {
+  padding: 6px 12px;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font-size: 13px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.detachedEditorTabs .ant-tabs-tab .ant-tabs-tab-btn {
+  color: #8c8c8c;
+}
+
+.detachedEditorTabs .ant-tabs-tab:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.detachedEditorTabs .ant-tabs-tab:hover .ant-tabs-tab-btn {
+  color: #595959;
+}
+
+.detachedEditorTabs .ant-tabs-tab-active {
+  background: #d6e4ff !important;
+  border-bottom: 2px solid #4f6ef7 !important;
+}
+
+.detachedEditorTabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #4f6ef7 !important;
+  font-weight: 500;
+}
+
+.detachedEditorTabs .ant-tabs-tab-remove {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #999;
+}
+
+.detachedEditorTabs .ant-tabs-tab-remove:hover {
+  color: #ff4d4f;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  height: 3px;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+.detachedEditorTabs .ant-tabs-nav-list {
+  gap: 2px;
+}
+
+.detachedEditorTabs .ant-tabs-ink-bar {
+  display: none;
+}
+
+.detachedEditorTabs .ant-tabs-content-holder {
+  display: none;
+}
+
+.editorHeaderSession {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  border: 1px solid;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.editorTabDisconnected {
+  color: #ff4d4f;
+  opacity: 0.7;
+}
+
+.editorTabSession {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #999;
+  background: #f0f0f0;
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 .fileContent .ant-table-wrapper,

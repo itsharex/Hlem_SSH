@@ -2,6 +2,7 @@ import {
   AimOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CheckOutlined,
   CompressOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -69,6 +70,7 @@ export function CodeEditor({
   const [line, setLine] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [canUndo, setCanUndo] = useState(false);
+  const [copied, setCopied] = useState(false);
   const largeDocument = useMemo(() => isLargeDocument(value), [value]);
 
   useEffect(() => {
@@ -385,6 +387,19 @@ export function CodeEditor({
               icon={<UndoOutlined />}
               disabled={readOnly || !canUndo}
               onClick={undoLastEdit}
+            />
+          </Tooltip>
+          <Tooltip title={copied ? "已复制" : "复制全部内容"}>
+            <Button
+              aria-label="复制全部内容"
+              size="small"
+              icon={copied ? <CheckOutlined style={{ color: "#52c41a" }} /> : <CopyOutlined />}
+              onClick={() => {
+                void navigator.clipboard.writeText(value ?? "").then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                });
+              }}
             />
           </Tooltip>
           {canFormatJson && (

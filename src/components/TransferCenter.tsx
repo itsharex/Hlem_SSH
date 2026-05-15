@@ -2,6 +2,7 @@ import {
   ClearOutlined,
   CloseOutlined,
   DeleteOutlined,
+  FolderOpenOutlined,
   PauseOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -9,7 +10,6 @@ import {
   UploadOutlined,
 } from "@ant-design/icons";
 import { Button, Drawer, Empty, Progress, Space, Tooltip } from "antd";
-import { useRef } from "react";
 import { formatBytes } from "../lib/format";
 import type { BackupRecord, FileSaveRecord, RemoteSession, TransferInfo } from "../types";
 
@@ -24,6 +24,7 @@ interface TransferCenterProps {
   onClose: () => void;
   onPause: (transferId: string) => void;
   onResume: (transferId: string) => void;
+  onOpenDir: (path: string) => void;
   onCancel: (transferId: string) => void;
   onRetry: (transferId: string) => void;
   onRemove: (transferId: string) => void;
@@ -55,22 +56,16 @@ export function TransferCenter({
   onRemoveBackup,
   onClear,
   onUploadFiles,
+  onOpenDir,
 }: TransferCenterProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const total = transfers.length + saveRecords.length + backupRecords.length;
 
-  function handleFileSelect() {
-    fileInputRef.current?.click();
-  }
-
-  function handleFileInputChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    const paths = Array.from(files)
-      .map((file) => (file as File & { path?: string }).path)
-      .filter(Boolean) as string[];
+  async function handleFileSelect() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({ title: "选择上传文件", multiple: true });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
     if (paths.length > 0) onUploadFiles(paths);
-    event.target.value = "";
   }
 
   return (
@@ -116,13 +111,6 @@ export function TransferCenter({
       }
       onClose={onClose}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        style={{ display: "none" }}
-        onChange={handleFileInputChange}
-      />
       {total === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务记录" />
       ) : (
@@ -142,6 +130,7 @@ export function TransferCenter({
             onRemoveSave,
             onRestoreBackup,
             onRemoveBackup,
+            onOpenDir,
           })}
         </div>
       )}
@@ -160,6 +149,7 @@ interface RenderAllRecordsProps {
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onRemove: (id: string) => void;
+  onOpenDir: (path: string) => void;
   onRetrySave: (id: string) => void;
   onRemoveSave: (id: string) => void;
   onRestoreBackup: (id: string) => void;
@@ -311,7 +301,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
   const targetSession = sessionForTransfer(transfer, props.sessions, props.transferSessionIds);
   const targetConnected = Boolean(targetSession?.state === "connected" && targetSession.sftpId);
   const retryDisabled = retryable && !targetConnected;
-  const retryTitle = retryDisabled ? "目标终端未连接" : "重试";
+  const retryTitle = retryDisabled ? "目标终端未连接" : transfer.direction === "upload" ? "重试上传" : "重新下载";
   const detailTooltip = transferDetailTooltip(transfer, targetSession, targetConnected);
 
   return (
@@ -376,6 +366,16 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
                 />
               </Tooltip>
             )}
+            {transfer.direction === "download" && (
+              <Tooltip title="打开文件夹">
+                <Button
+                  aria-label="打开文件夹"
+                  icon={<FolderOpenOutlined />}
+                  size="small"
+                  onClick={() => props.onOpenDir(targetPath(transfer))}
+                />
+              </Tooltip>
+            )}
             <Tooltip title="删除">
               <Button
                 aria-label="删除传输"
@@ -392,7 +392,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
             {targetSession ? ` · ${targetConnected ? "已连接" : "未连接"}` : ""}
           </span>
           <span>来源：{sourcePath(transfer)}</span>
-          <span>目标：{targetPath(transfer)}</span>
+          <span>{transfer.direction === "upload" ? "目标" : "保存"}：{targetPath(transfer)}</span>
         </div>
         <Progress
           percent={percent}
@@ -404,7 +404,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
           <span>{formatBytes(transfer.bytesDone)} / {formatBytes(transfer.bytesTotal)}</span>
           <span>{formatSpeed(transfer)}</span>
         </div>
-        {transfer.error && <div className="transferListError">{transfer.error}</div>}
+        {transfer.error && !isTransferDone(transfer) && <div className="transferListError">{transfer.error}</div>}
       </article>
     </Tooltip>
   );
@@ -476,7 +476,12 @@ function parentPath(path: string) {
   return normalized.slice(0, index);
 }
 
+function isTransferDone(transfer: TransferInfo) {
+  return transfer.bytesTotal > 0 && transfer.bytesDone >= transfer.bytesTotal;
+}
+
 function statusText(transfer: TransferInfo) {
+  if (isTransferDone(transfer)) return "已完成";
   const map: Record<TransferInfo["status"], string> = {
     queued: "等待中",
     running: "传输中",
@@ -489,12 +494,13 @@ function statusText(transfer: TransferInfo) {
 }
 
 function statusTone(transfer: TransferInfo) {
-  if (transfer.status === "completed") return "success";
+  if (isTransferDone(transfer)) return "success";
   if (transfer.status === "failed" || transfer.status === "canceled") return "failed";
   return "warning";
 }
 
 function progressStatus(transfer: TransferInfo) {
+  if (isTransferDone(transfer)) return "success";
   if (transfer.status === "failed" || transfer.status === "canceled") return "exception";
   if (transfer.status === "completed") return "success";
   return "active";
@@ -523,7 +529,7 @@ function transferDetailTooltip(
         <strong>{targetSession?.name ?? "未知终端"}</strong>
         <span>来源</span>
         <strong>{sourcePath(transfer)}</strong>
-        <span>目标</span>
+        <span>{transfer.direction === "upload" ? "目标" : "保存"}</span>
         <strong>{targetPath(transfer)}</strong>
         <span>大小</span>
         <strong>{formatBytes(transfer.bytesDone)} / {formatBytes(transfer.bytesTotal)}</strong>
@@ -531,7 +537,7 @@ function transferDetailTooltip(
         <strong>{formatBeijingTime(transfer.createdAt)}</strong>
         <span>更新时间</span>
         <strong>{formatBeijingTime(transfer.updatedAt)}</strong>
-        {transfer.error && (
+        {transfer.error && !isTransferDone(transfer) && (
           <>
             <span>错误</span>
             <strong className="detailHoverError">{transfer.error}</strong>

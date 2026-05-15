@@ -32,7 +32,8 @@
       "Bash(awk '/<EmptyWorkspace/,/\\\\/>/' \"/c/Users/Administrator/Desktop/py/Helm/src/App.tsx\")",
       "Bash(awk '/<EmptyWorkspace/,0' \"/c/Users/Administrator/Desktop/py/Helm/src/App.tsx\")",
       "Bash(awk '/EmptyWorkspace/{print NR\": \"$0}' \"/c/Users/Administrator/Desktop/py/Helm/src/App.tsx\")",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(python3 *)"
     ]
   }
 }

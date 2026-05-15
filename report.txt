@@ -1,0 +1,226 @@
+SSH CONNECTION STATUS COMMUNICATION REPORT
+==========================================
+
+1. HOW FRONTEND DETECTS CONNECTION DROPS
+=========================================
+
+The frontend uses Tauri event listeners (pub/sub pattern) to detect connection status changes.
+
+Event Setup (App.tsx, lines 177-213):
+- remoteApi.onSshStatus(handleSshStatus)
+- remoteApi.onSftpChanged(handleSftpChanged)
+- remoteApi.onTerminalOutput(handleTerminalOutput)
+- remoteApi.onTerminalClosed(handleTerminalClosed)
+- Plus transfer, telemetry, and forward status listeners
+
+When connection drops, backend emits "ssh://status" event with status="disconnected"
+This triggers handleSshStatus handler which updates session state:
+- state: "disconnected"
+- connectionId: null
+- terminalId: null
+- sftpId: null (critical - FileManager becomes disabled)
+- telemetryJobId: null
+- files: [] (clears file listing)
+- telemetry: empty object
+
+
+2. EVENTS AND STORES INVOLVED
+=============================
+
+Event Names (remoteApi.ts, lines 25-36):
+- ssh://status           (connection status changes)
+- terminal://output     (terminal data)
+- terminal://closed     (terminal channel closed)
+- sftp://changed        (SFTP directory changed)
+- telemetry://snapshot
+- transfer://progress
+- transfer://completed
+- transfer://failed
+- host-key://verify
+- forward://status
+
+State Management:
+- Uses React hooks (useState) - NO Redux/Zustand
+- Main state in App.tsx:
+  * sessions: RemoteSession[]
+  * activeSessionId: string
+  * connectingSessionId: string | null
+  * openSessionIds: string[]
+
+RemoteSession Type (types.ts):
+- id, name, host, username
+- state: "connected" | "connecting" | "disconnected" | "failed"
+- connectionId?: string | null
+- terminalId?: string | null
+- sftpId?: string | null
+- telemetryJobId?: string | null
+- terminal: TerminalEntry[]
+- telemetry: ServerTelemetry
+- files: RemoteFileEntry[]
+
+
+3. CONNECTION TABS AND CONTEXT
+===============================
+
+Tab Management (App.tsx, lines 128-135):
+- openSessionIds: array of session IDs that have open tabs
+- activeSessionId: currently active tab
+- openSessions: computed from openSessionIds + sessions array
+- activeSession: computed from activeSessionId + openSessions
+
+Tab Operations:
+- Open tab: activateSession(id) adds to openSessionIds
+- Close tab: closeSession(id) removes from openSessionIds
+- Switch tab: setActiveSessionId(id)
+
+Connection Lifecycle (App.tsx, lines 969-1091):
+1. User clicks Connect
+2. connectSession() called
+3. remoteApi.connect(sessionId) returns connectionId
+4. handleSshStatus updates state to "connected"
+5. Terminal opens in background (terminalId set)
+6. SFTP opens in background (sftpId set)
+7. FileManager becomes enabled when sftpId is available
+
+
+4. sftpId USAGE AND ACQUISITION
+================================
+
+How sftpId is Obtained:
+
+Step 1: SSH connection established
+  connection = await remoteApi.connect(session.id)
+  connectionId = connection.connectionId
+
+Step 2: SFTP channel opened
+  sftp = await remoteApi.openSftp(connectionId)
+  Returns: { sftpId: string, connectionId: string, openedAt: string }
+
+Step 3: Stored in session state
+  updateSession(session.id, (item) => ({
+    ...item,
+    sftpId: sftp.sftpId,
+  }))
+
+sftpId in FileManager.tsx (line 227):
+  const canUseFiles = session.state === "connected" && Boolean(session.sftpId)
+
+Usage Pattern:
+  const sftpId = session.sftpId
+  await remoteApi.listFiles(sftpId, path)
+  await remoteApi.mkdir(sftpId, path)
+  await remoteApi.upload(sftpId, localPath, remotePath, ...)
+  await remoteApi.download(sftpId, remotePath, localPath, ...)
+
+Passed via Props (App.tsx, line 1553):
+  <FileManager
+    session={activeSession}  // Contains sftpId
+    onPathChange={...}
+    onRefresh={...}
+    onFileOperation={...}
+    onUploadFiles={...}
+  />
+
+Transfer Target Tracking (App.tsx, lines 700-705):
+  Maps sftpId to sessionId for transfer history persistence
+  Used to recover session context when transfers complete
+
+
+5. EVENT LISTENERS FOR DISCONNECT/CLOSE EVENTS
+===============================================
+
+SSH Status Listener:
+- Event: "ssh://status"
+- Handler: handleSshStatus (App.tsx, lines 829-852)
+- Payload: ConnectionInfo { connectionId, sessionId, host, port, username, status, connectedAt }
+- Action: Updates session state based on status value
+
+Terminal Closed Listener:
+- Event: "terminal://closed"
+- Handler: handleTerminalClosed (App.tsx, lines 928-945)
+- Payload: TerminalClosedEvent { terminalId }
+- Action: Clears terminalId, adds "终端通道已关闭" message to terminal
+
+SFTP Changed Listener:
+- Event: "sftp://changed"
+- Handler: handleSftpChanged (App.tsx, lines 854-859)
+- Payload: SftpChangedEvent { sftpId, path }
+- Action: Refreshes file listing for affected sessions
+
+Manual Disconnect Flow (App.tsx, lines 581-604):
+  async function teardownSession(session: RemoteSession) {
+    if (!session.connectionId) return
+    try {
+      await remoteApi.disconnect(session.connectionId)
+      updateSession(session.id, (item) => ({
+        ...item,
+        state: "disconnected",
+        connectionId: null,
+        terminalId: null,
+        sftpId: null,
+        telemetryJobId: null,
+        files: [],
+        telemetry: createEmptyTelemetry(item.host),
+        terminal: [...item.terminal, createTerminalEntry("system", "连接已断开")],
+      }))
+    } catch (error) {
+      appendTerminal(session.id, "error", formatSessionError(error, session))
+    }
+  }
+
+
+6. DATA FLOW ON CONNECTION DROP
+================================
+
+Backend emits ssh://status event
+    ↓
+remoteApi.onSshStatus listener triggered
+    ↓
+handleSshStatus handler called with { status: "disconnected", sessionId, ... }
+    ↓
+setSessions updates RemoteSession:
+  - state: "disconnected"
+  - connectionId: null
+  - terminalId: null
+  - sftpId: null ← FileManager detects this
+  - files: []
+    ↓
+FileManager re-renders:
+  - canUseFiles = false (because sftpId is null)
+  - File operations disabled
+  - Tree view shows "SFTP 未连接"
+    ↓
+User sees disconnected state in UI
+
+
+7. KEY FILES AND LINE REFERENCES
+=================================
+
+App.tsx (1-1807)
+  - Main state management and event listeners
+  - Lines 177-213: Event listener setup
+  - Lines 829-852: handleSshStatus
+  - Lines 854-859: handleSftpChanged
+  - Lines 928-945: handleTerminalClosed
+  - Lines 969-1091: connectSession flow
+  - Lines 581-604: teardownSession flow
+
+FileManager.tsx (183-1039)
+  - File operations UI
+  - Line 227: canUseFiles check
+  - Line 1192: sftpId extraction
+  - Uses sftpId for all file operations
+
+remoteApi.ts (1-171)
+  - Event listener registration
+  - Lines 25-36: EVENT_NAMES constants
+  - Lines 142-151: Event listener functions
+  - Line 41: disconnect function
+
+types.ts (1-391)
+  - RemoteSession interface (lines 3-18)
+  - ConnectionInfo interface (lines 254-262)
+  - SftpInfo interface (lines 272-276)
+  - SftpChangedEvent interface (lines 387-390)
+  - TerminalClosedEvent interface (lines 342-344)
+

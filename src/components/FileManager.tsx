@@ -8,9 +8,13 @@ import {
   EditOutlined,
   FileTextOutlined,
   ExportOutlined,
+  FileExcelOutlined,
   FileImageOutlined,
   FileMarkdownOutlined,
+  FileOutlined,
   FilePdfOutlined,
+  FilePptOutlined,
+  FileWordOutlined,
   FileZipOutlined,
   FolderAddOutlined,
   FolderOutlined,
@@ -29,16 +33,15 @@ import { App as AntdApp, Button, Dropdown, Form, Input, Modal, Radio, Space, Spi
 import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { DataNode } from "antd/es/tree";
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { writeClipboardText } from "../lib/clipboard";
 import { formatFileSize } from "../lib/format";
 import { getErrorMessage } from "../lib/configMapping";
-import { editorChannelName, type EditorChannelMessage } from "../lib/editorChannel";
+import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "../lib/editorChannel";
 import { getParentPath, getPathSegments, joinPath, normalizePath } from "../lib/path";
 import { isTauriRuntime } from "../api/runtime";
 import type { QuickCommand, RemoteFileEntry, RemoteSession } from "../types";
 
-const CodeEditor = lazy(() => import("./CodeEditor").then((module) => ({ default: module.CodeEditor })));
 
 const beijingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
@@ -60,8 +63,9 @@ interface FileManagerProps {
   onFileOperation: (operation: FileOperation) => Promise<void>;
   onUploadFiles: (localPaths: string[], targetDirectory: string) => Promise<void>;
   onDownloadFile: (remotePath: string, fileName: string) => Promise<void>;
-  onReadText: (path: string) => Promise<string>;
-  onWriteText: (path: string, content: string) => Promise<void>;
+  onDownloadFiles: (files: { remotePath: string; fileName: string }[]) => Promise<void>;
+  onReadText: (path: string, sessionId?: string) => Promise<string>;
+  onWriteText: (path: string, content: string, sessionId?: string) => Promise<void>;
   onSendCommand: (command: string) => Promise<void>;
   quickCommands: QuickCommand[];
   onQuickCommandsChange: (commands: QuickCommand[]) => Promise<void>;
@@ -82,7 +86,6 @@ type FileDialogState =
   | { kind: "move"; entry: RemoteFileEntry; value: string };
 
 type ContextMenuState = { entry: RemoteFileEntry; x: number; y: number };
-type EditorState = { path: string; content: string; saving: boolean };
 type FileCategory =
   | "directory"
   | "archive"
@@ -191,6 +194,7 @@ export function FileManager({
   onFileOperation,
   onUploadFiles,
   onDownloadFile,
+  onDownloadFiles,
   onReadText,
   onWriteText,
   onSendCommand,
@@ -204,13 +208,13 @@ export function FileManager({
   const [refreshing, setRefreshing] = useState(false);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const [tableScrollY, setTableScrollY] = useState(180);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [dialog, setDialog] = useState<FileDialogState | null>(null);
   const [directoryEntries, setDirectoryEntries] = useState<Record<string, RemoteFileEntry[]>>({});
   const [directoryLoadingKeys, setDirectoryLoadingKeys] = useState<string[]>([]);
   const [directoryExpandedKeys, setDirectoryExpandedKeys] = useState<string[]>(["/"]);
   const [dragging, setDragging] = useState(false);
-  const [editor, setEditor] = useState<EditorState | null>(null);
   const [openingEditorPath, setOpeningEditorPath] = useState<string | null>(null);
   const [commandDialogOpen, setCommandDialogOpen] = useState(false);
   const [commandEditingId, setCommandEditingId] = useState<string | null>(null);
@@ -304,10 +308,6 @@ export function FileManager({
     };
   }, []);
 
-  useEffect(() => {
-    void import("./CodeEditor");
-  }, []);
-
   useLayoutEffect(() => {
     const element = contentRef.current;
     if (!element) return;
@@ -373,6 +373,7 @@ export function FileManager({
     onPathChange(targetPath);
     setSearchText("");
     setFocusedPath(null);
+    setSelectedRowKeys([]);
   }
 
   function isTreeSwitcherClick(target: EventTarget | null) {
@@ -447,77 +448,61 @@ export function FileManager({
     onPathChange(entry.path || joinPath(path, entry.name));
     setSearchText("");
     setFocusedPath(null);
+    setSelectedRowKeys([]);
   }
 
   async function openEditor(entry: RemoteFileEntry) {
     if (!canUseFiles) return;
     const targetPath = entry.path || joinPath(path, entry.name);
-    if (openingEditorPath || editor) return;
+    if (openingEditorPath) return;
+
+    const sessionId = session.id;
+    const sessionName = session.name || session.host;
+
     setOpeningEditorPath(targetPath);
     const messageKey = `editor-open-${targetPath}`;
     message.open({ key: messageKey, type: "loading", content: "正在读取文件...", duration: 0 });
     try {
-      const content = await onReadText(targetPath);
-      setEditor({ path: targetPath, content, saving: false });
-      message.destroy(messageKey);
-    } catch (error) {
-      message.open({ key: messageKey, type: "error", content: getErrorMessage(error), duration: 3 });
-    } finally {
-      setOpeningEditorPath(null);
-    }
-  }
+      const content = await onReadText(targetPath, sessionId);
 
-  async function saveEditor() {
-    if (!editor) return;
-    setEditor({ ...editor, saving: true });
-    try {
-      await onWriteText(editor.path, editor.content);
-      message.open({ key: `editor-save-${editor.path}`, type: "success", content: "文件已保存", duration: 2 });
-      setEditor(null);
-    } catch (error) {
-      setEditor({ ...editor, saving: false });
-      message.error(getErrorMessage(error));
-    }
-  }
+      // 如果已有编辑器窗口，直接发送 addTab
+      const existingChannel = detachedEditorsRef.current.values().next().value as BroadcastChannel | undefined;
+      if (existingChannel) {
+        existingChannel.postMessage({ type: "addTab", path: targetPath, content, sessionId, sessionName } satisfies EditorChannelMessage);
+        message.destroy(messageKey);
+        return;
+      }
 
-  async function detachEditor() {
-    if (!editor) return;
-    const editorId = crypto.randomUUID();
-    const editorPath = editor.path;
-    let latestContent = editor.content;
-    const channel = new BroadcastChannel(editorChannelName(editorId));
-    detachedEditorsRef.current.set(editorId, channel);
-    channel.onmessage = (event: MessageEvent<EditorChannelMessage>) => {
-      const payload = event.data;
-      if (payload.type === "ready") {
-        channel.postMessage({ type: "init", path: editorPath, content: latestContent } satisfies EditorChannelMessage);
-      }
-      if (payload.type === "change") {
-        latestContent = payload.content;
-      }
-      if (payload.type === "save") {
-        latestContent = payload.content;
-        void onWriteText(editorPath, payload.content)
-          .then(() => {
-            channel.postMessage({ type: "saved" } satisfies EditorChannelMessage);
-          })
-          .catch((error) => {
-            channel.postMessage({ type: "error", message: getErrorMessage(error) } satisfies EditorChannelMessage);
-          });
-      }
-      if (payload.type === "close") {
-        channel.close();
-        detachedEditorsRef.current.delete(editorId);
-      }
-    };
+      // 没有窗口，创建新窗口
+      const editorId = GLOBAL_EDITOR_CHANNEL;
+      const channel = new BroadcastChannel(editorChannelName(editorId));
+      detachedEditorsRef.current.set(editorId, channel);
+      channel.onmessage = (event: MessageEvent<EditorChannelMessage>) => {
+        const payload = event.data;
+        if (payload.type === "ready") {
+          channel.postMessage({ type: "init", path: targetPath, content, sessionId, sessionName } satisfies EditorChannelMessage);
+        }
+        if (payload.type === "save") {
+          void onWriteText(payload.path, payload.content, payload.sessionId)
+            .then(() => {
+              channel.postMessage({ type: "saved", path: payload.path, sessionId: payload.sessionId } satisfies EditorChannelMessage);
+            })
+            .catch((error) => {
+              channel.postMessage({ type: "error", message: getErrorMessage(error), path: payload.path, sessionId: payload.sessionId } satisfies EditorChannelMessage);
+            });
+        }
+        if (payload.type === "close") {
+          channel.close();
+          detachedEditorsRef.current.delete(editorId);
+        }
+      };
 
-    try {
       if (isTauriRuntime()) {
         const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-        const windowLabel = `editor-${editorId}`;
+        const windowLabel = `editor-global`;
         const webview = new WebviewWindow(windowLabel, {
           url: `index.html?editorWindow=${editorId}`,
-          title: `编辑 ${getFileName(editorPath)}`,
+          title: `文件编辑器`,
           width: 1100,
           height: 760,
           minWidth: 760,
@@ -528,13 +513,13 @@ export function FileManager({
           message.error(String(event.payload));
         });
       } else {
-        window.open(`${window.location.origin}${window.location.pathname}?editorWindow=${editorId}`, `editor-${editorId}`, "width=1100,height=760");
+        window.open(`${window.location.origin}${window.location.pathname}?editorWindow=${editorId}`, `editor-global`, "width=1100,height=760");
       }
-      setEditor(null);
+      message.destroy(messageKey);
     } catch (error) {
-      channel.close();
-      detachedEditorsRef.current.delete(editorId);
-      message.error(getErrorMessage(error));
+      message.open({ key: messageKey, type: "error", content: getErrorMessage(error), duration: 3 });
+    } finally {
+      setOpeningEditorPath(null);
     }
   }
 
@@ -687,35 +672,88 @@ export function FileManager({
     startBackgroundOperation({ kind: dialog.kind, sourcePath, targetPath: value });
   }
 
+  // Get the effective entries for context menu (multi-select aware)
+  function getContextEntries(): RemoteFileEntry[] {
+    const entry = contextMenu?.entry;
+    if (!entry) return [];
+    const entryKey = entry.path || joinPath(path, entry.name);
+    if (selectedRowKeys.length > 0 && selectedRowKeys.includes(entryKey)) {
+      return files.filter((f) => selectedRowKeys.includes(f.path || joinPath(path, f.name)));
+    }
+    return [entry];
+  }
+
+  const contextEntries = getContextEntries();
+  const isMulti = contextEntries.length > 1;
+  const hasDirectory = contextEntries.some((e) => e.fileType === "directory");
+
   const contextMenuItems: MenuProps["items"] = [
-    { key: "rename", label: "重命名" },
-    { key: "copyPath", label: "复制完整路径" },
-    ...(contextMenu?.entry.fileType !== "directory" ? [{ key: "download", label: "下载" }] : []),
-    { key: "copy", label: "复制到" },
-    { key: "move", label: "移动到" },
+    ...(!isMulti ? [{ key: "rename", label: "重命名" }] : []),
+    { key: "copyPath", label: isMulti ? `复制 ${contextEntries.length} 个路径` : "复制完整路径" },
+    ...(!hasDirectory ? [{ key: "download", label: isMulti ? `下载 ${contextEntries.length} 个文件` : "下载" }] : []),
+    ...(!isMulti ? [
+      { key: "copy", label: "复制到" },
+      { key: "move", label: "移动到" },
+    ] : []),
     { type: "divider" },
-    { key: "delete", label: "删除", danger: true },
+    { key: "delete", label: isMulti ? `删除 ${contextEntries.length} 项` : "删除", danger: true },
   ];
 
   function handleContextMenuClick(key: string) {
-    const entry = contextMenu?.entry;
+    const entries = getContextEntries();
     setContextMenu(null);
-    if (!entry) return;
-    const fullPath = entry.path || joinPath(path, entry.name);
-    if (key === "rename") setDialog({ kind: "rename", entry, value: entry.name });
-    if (key === "copyPath") void copyPath(entry);
-    if (key === "download" && entry.fileType !== "directory") void downloadFile(fullPath, entry.name);
-    if (key === "copy") setDialog({ kind: "copy", entry, value: getParentPath(fullPath) });
-    if (key === "move") setDialog({ kind: "move", entry, value: getParentPath(fullPath) });
+    if (entries.length === 0) return;
+
+    if (key === "rename" && entries.length === 1) {
+      setDialog({ kind: "rename", entry: entries[0], value: entries[0].name });
+    }
+    if (key === "copyPath") {
+      const paths = entries.map((e) => e.path || joinPath(path, e.name)).join("\n");
+      void navigator.clipboard.writeText(paths);
+      message.success("已复制路径");
+    }
+    if (key === "download") {
+      const downloadEntries = entries.filter((e) => e.fileType !== "directory");
+      if (downloadEntries.length > 0) {
+        onDownloadFiles(downloadEntries.map((e) => ({
+          remotePath: e.path || joinPath(path, e.name),
+          fileName: e.name,
+        })));
+      }
+    }
+    if (key === "copy" && entries.length === 1) {
+      const fp = entries[0].path || joinPath(path, entries[0].name);
+      setDialog({ kind: "copy", entry: entries[0], value: getParentPath(fp) });
+    }
+    if (key === "move" && entries.length === 1) {
+      const fp = entries[0].path || joinPath(path, entries[0].name);
+      setDialog({ kind: "move", entry: entries[0], value: getParentPath(fp) });
+    }
     if (key === "delete") {
+      const paths = entries.map((e) => e.path || joinPath(path, e.name));
       modal.confirm({
-        title: "删除文件",
-        content: fullPath,
+        title: `删除${entries.length > 1 ? ` ${entries.length} 项` : ""}`,
+        content: (
+          <div>
+            <div style={{ color: "#8c8c8c", fontSize: 12, marginBottom: 6 }}>以下内容将被永久删除：</div>
+            <div className="deleteConfirmList">
+              {entries.map((e) => (
+                <div key={e.name} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {fileCategoryMeta(e).icon}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ),
         okText: "删除",
         okButtonProps: { danger: true },
         cancelText: "取消",
-        onOk: () => {
-          startBackgroundOperation({ kind: "delete", sourcePath: fullPath });
+        onOk: async () => {
+          const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
+          await onSendCommand(`rm -rf ${quoted}`);
+          setSelectedRowKeys([]);
+          refresh();
         },
       });
     }
@@ -858,6 +896,11 @@ export function FileManager({
               loading={tableLoading}
               tableLayout="fixed"
               showSorterTooltip={false}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: (keys) => setSelectedRowKeys(keys as string[]),
+                columnWidth: 32,
+              }}
               rowClassName={(entry) => (focusedPath && entry.path === focusedPath ? "fileTableRow-focused" : "")}
               pagination={false}
               onRow={(entry) => ({
@@ -866,6 +909,10 @@ export function FileManager({
                   if (!canUseFiles) return;
                   event.preventDefault();
                   event.stopPropagation();
+                  const entryKey = entry.path || joinPath(path, entry.name);
+                  if (!selectedRowKeys.includes(entryKey)) {
+                    setSelectedRowKeys([entryKey]);
+                  }
                   setContextMenu(null);
                   setContextMenu({ entry, x: event.clientX, y: event.clientY });
                 },
@@ -1049,64 +1096,7 @@ export function FileManager({
           </Form>
         )}
       </Modal>
-      <Modal
-        open={Boolean(editor)}
-        centered
-        title={
-          <div className="fileEditorTitle">
-            <span title={editor?.path ?? ""}>{editor?.path ?? ""}</span>
-            <Tooltip title="独立窗口">
-              <Button
-                aria-label="独立窗口"
-                size="small"
-                icon={<ExportOutlined />}
-                disabled={!editor}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void detachEditor();
-                }}
-              />
-            </Tooltip>
-          </div>
-        }
-        onCancel={() => setEditor(null)}
-        footer={[
-          <Button key="close" onClick={() => setEditor(null)}>
-            关闭
-          </Button>,
-          <Button
-            key="save"
-            type="primary"
-            icon={<SaveOutlined />}
-            loading={editor?.saving}
-            className="fileEditorSaveButton"
-            onClick={() => void saveEditor()}
-          >
-            保存
-          </Button>,
-        ]}
-        width={820}
-        className="fileEditorModal"
-        destroyOnHidden
-      >
-        <Suspense fallback={<EditorFallback />}>
-          <CodeEditor
-            path={editor?.path ?? ""}
-            value={editor?.content ?? ""}
-            onChange={(content) => editor && setEditor({ ...editor, content })}
-            onFormatJson={(content) => editor && setEditor({ ...editor, content })}
-          />
-        </Suspense>
-      </Modal>
     </section>
-  );
-}
-
-function EditorFallback() {
-  return (
-    <div className="fileEditorLoading">
-      <Spin />
-    </div>
   );
 }
 
@@ -1391,19 +1381,19 @@ function fileCategoryMeta(entry: RemoteFileEntry): {
 } {
   const category = fileCategory(entry);
   const map: Record<FileCategory, { label: string; description: string; icon: React.ReactNode }> = {
-    directory: { label: "文件夹", description: "目录", icon: <FolderOutlined /> },
-    archive: { label: "压缩包", description: "压缩包 / 归档文件", icon: <FileZipOutlined /> },
-    script: { label: "脚本", description: "Shell / Python / Node / PowerShell 等脚本", icon: <CodeOutlined /> },
+    directory: { label: "文件夹", description: "目录", icon: <FolderOutlined style={{ color: "#faad14" }} /> },
+    archive: { label: "压缩包", description: "压缩包 / 归档文件", icon: <FileZipOutlined style={{ color: "#fa8c16" }} /> },
+    script: { label: "脚本", description: "Shell / Python / Node / PowerShell 等脚本", icon: <CodeOutlined style={{ color: "#52c41a" }} /> },
     document: { label: "文档", description: "Markdown / PDF / Office / README 等文档", icon: documentIcon(entry.name) },
-    log: { label: "日志", description: "日志文件", icon: <BookOutlined /> },
-    text: { label: "文本", description: "纯文本文件", icon: <FileTextOutlined /> },
-    media: { label: "媒体", description: "图片 / 音频 / 视频文件", icon: <FileImageOutlined /> },
-    env: { label: "环境变量", description: "环境变量或 dotenv 配置", icon: <SettingOutlined /> },
-    config: { label: "配置", description: "配置文件", icon: <SettingOutlined /> },
-    data: { label: "数据", description: "JSON / YAML / CSV / SQL 等数据文件", icon: <DatabaseOutlined /> },
-    binary: { label: "可执行", description: "可执行程序或二进制文件", icon: <PlaySquareOutlined /> },
-    symlink: { label: "链接", description: "符号链接", icon: <ExportOutlined /> },
-    other: { label: "文件", description: "普通文件", icon: <FileTextOutlined /> },
+    log: { label: "日志", description: "日志文件", icon: <BookOutlined style={{ color: "#8c8c8c" }} /> },
+    text: { label: "文本", description: "纯文本文件", icon: <FileTextOutlined style={{ color: "#595959" }} /> },
+    media: { label: "媒体", description: "图片 / 音频 / 视频文件", icon: <FileImageOutlined style={{ color: "#13c2c2" }} /> },
+    env: { label: "环境变量", description: "环境变量或 dotenv 配置", icon: <SettingOutlined style={{ color: "#fa8c16" }} /> },
+    config: { label: "配置", description: "配置文件", icon: <SettingOutlined style={{ color: "#722ed1" }} /> },
+    data: { label: "数据", description: "JSON / YAML / CSV / SQL 等数据文件", icon: <DatabaseOutlined style={{ color: "#1890ff" }} /> },
+    binary: { label: "可执行", description: "可执行程序或二进制文件", icon: <PlaySquareOutlined style={{ color: "#f5222d" }} /> },
+    symlink: { label: "链接", description: "符号链接", icon: <ExportOutlined style={{ color: "#2f54eb" }} /> },
+    other: { label: "文件", description: "普通文件", icon: <FileTextOutlined style={{ color: "#8c8c8c" }} /> },
   };
   return { category, ...map[category] };
 }
@@ -1414,15 +1404,15 @@ function fileCategory(entry: RemoteFileEntry): FileCategory {
   const name = entry.name.toLowerCase();
   const ext = fileExtension(name);
   if (isEnvFile(name)) return "env";
-  if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "war", "apk", "deb", "rpm"].includes(ext)) return "archive";
-  if (["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "lua", "rb", "pl"].includes(ext)) return "script";
-  if (["md", "markdown", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf"].includes(ext) || /^readme(?:\.|$)/.test(name)) return "document";
+  if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "war", "apk", "deb", "rpm", "dmg", "iso", "cab", "lz", "zst"].includes(ext)) return "archive";
+  if (["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "lua", "rb", "pl", "php", "go", "rs", "c", "cpp", "h", "java", "kt", "swift", "r", "m"].includes(ext)) return "script";
+  if (["md", "markdown", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "odt", "ods", "odp", "pages", "numbers", "key", "epub"].includes(ext) || /^readme(?:\.|$)/.test(name)) return "document";
   if (["log", "out", "err", "trace"].includes(ext) || name.endsWith(".log.1")) return "log";
   if (["txt", "text", "ini", "conf", "properties", "service"].includes(ext)) return "text";
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "mp4", "mov", "avi", "mkv", "mp3", "wav", "flac"].includes(ext)) return "media";
-  if (["json", "yaml", "yml", "toml", "xml", "csv", "tsv", "sql", "db", "sqlite"].includes(ext)) return "data";
-  if (["config", "cnf", "cfg"].includes(ext) || ["dockerfile", "nginx.conf", "package.json", "tsconfig.json"].includes(name)) return "config";
-  if (["exe", "bin", "run", "appimage"].includes(ext) || isExecutable(entry)) return "binary";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff", "tif", "psd", "ai", "raw", "cr2", "nef", "heic", "avif", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "opus"].includes(ext)) return "media";
+  if (["json", "yaml", "yml", "toml", "xml", "csv", "tsv", "sql", "db", "sqlite", "parquet", "avro", "proto", "graphql"].includes(ext)) return "data";
+  if (["config", "cnf", "cfg", "htaccess", "editorconfig", "gitignore", "dockerignore"].includes(ext) || ["dockerfile", "nginx.conf", "package.json", "tsconfig.json", "makefile", "cmakelists.txt", "vagrantfile"].includes(name)) return "config";
+  if (["exe", "bin", "run", "appimage", "msi", "dll", "so", "dylib", "a", "o", "elf", "com"].includes(ext) || isExecutable(entry)) return "binary";
   return "other";
 }
 
@@ -1442,9 +1432,12 @@ function isExecutable(entry: RemoteFileEntry) {
 
 function documentIcon(name: string) {
   const ext = fileExtension(name.toLowerCase());
-  if (ext === "md" || ext === "markdown") return <FileMarkdownOutlined />;
-  if (ext === "pdf") return <FilePdfOutlined />;
-  return <FileTextOutlined />;
+  if (ext === "md" || ext === "markdown") return <FileMarkdownOutlined style={{ color: "#1890ff" }} />;
+  if (ext === "pdf") return <FilePdfOutlined style={{ color: "#f5222d" }} />;
+  if (["xls", "xlsx", "ods", "numbers", "csv"].includes(ext)) return <FileExcelOutlined style={{ color: "#52c41a" }} />;
+  if (["ppt", "pptx", "odp", "key"].includes(ext)) return <FilePptOutlined style={{ color: "#fa541c" }} />;
+  if (["doc", "docx", "odt", "pages", "rtf"].includes(ext)) return <FileWordOutlined style={{ color: "#1890ff" }} />;
+  return <FileTextOutlined style={{ color: "#722ed1" }} />;
 }
 
 function formatBeijingModifiedTime(value: string) {
