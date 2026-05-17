@@ -308,14 +308,14 @@ export function defaultTerminalOptions() {
   return {
     encoding: "utf-8",
     theme: "default",
-    keepaliveIntervalSec: 30,
+    keepaliveIntervalSec: 15,
   };
 }
 
 export function defaultSshOptions(): SshOptions {
   return {
     connectTimeoutMs: 10000,
-    keepaliveIntervalSec: 30,
+    keepaliveIntervalSec: 15,
     hostKeyFingerprint: null,
     proxy: null,
   };

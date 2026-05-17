@@ -331,7 +331,7 @@ function toSessionInput(values: SessionFormValues, previous: SessionInput, mode:
     ssh: {
       ...previous.ssh,
       connectTimeoutMs: 10000,
-      keepaliveIntervalSec: 30,
+      keepaliveIntervalSec: 15,
       proxy: proxyFromValues(values),
     },
     defaultPath: "",
@@ -341,7 +341,7 @@ function toSessionInput(values: SessionFormValues, previous: SessionInput, mode:
       ...previous.terminal,
       encoding: "utf-8",
       theme: "default",
-      keepaliveIntervalSec: 30,
+      keepaliveIntervalSec: 15,
     },
     sftp: {
       ...previous.sftp,

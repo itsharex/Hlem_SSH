@@ -1,7 +1,18 @@
 use super::*;
 
 impl RemoteRuntime {
-    pub async fn connect(
+    pub fn connect(
+        &self,
+        app: &AppHandle,
+        session: SessionConfig,
+        trusted: Option<KnownHostEntry>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<ConnectionInfo>> + Send + '_>> {
+        let app = app.clone();
+        let this = self.clone();
+        Box::pin(async move { this.connect_inner(&app, session, trusted).await })
+    }
+
+    async fn connect_inner(
         &self,
         app: &AppHandle,
         session: SessionConfig,
@@ -67,10 +78,9 @@ impl RemoteRuntime {
         );
 
         let mut config = client::Config::default();
-        // Do NOT set inactivity_timeout here. The previous value (connect_timeout_ms, ~10s)
-        // was shorter than keepalive_interval (30s), causing russh to garbage-collect idle
-        // connections before a keepalive could be sent. Setting it to None lets the
-        // keepalive mechanism alone decide connection liveness.
+        // 不要在这里设置 inactivity_timeout。之前用过 connect_timeout_ms (~10s)，
+        // 比 keepalive_interval 还短，会让 russh 在 keepalive 发出前就把空闲连接
+        // 当作死连接回收掉。设为 None，让 keepalive 机制独占判定连接活性的权限。
         config.inactivity_timeout = None;
         config.keepalive_interval = Some(Duration::from_secs(
             session.ssh.keepalive_interval_sec.max(1) as u64,
@@ -116,21 +126,22 @@ impl RemoteRuntime {
         let info = ConnectionInfo {
             connection_id: connection_id.clone(),
             session_id: session.id.clone(),
-            host: session.host,
+            host: session.host.clone(),
             port: session.port,
-            username: session.username,
+            username: session.username.clone(),
             status: RuntimeStatus::Connected,
             connected_at: now(),
         };
         self.connections.write().await.insert(
-            connection_id,
+            connection_id.clone(),
             ConnectionRecord {
                 info: info.clone(),
-                handle,
+                handle: handle.clone(),
                 remote_forwards,
             },
         );
         events::emit(app, events::SSH_STATUS, info.clone());
+
         Ok(info)
     }
 

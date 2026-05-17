@@ -164,6 +164,110 @@ ps -eo pid=,comm=,pcpu=,rss= --sort=-pcpu 2>/dev/null | sed -n "1,8p" | while re
   printf "PROC %s %s %s %s\n" "$pid" "$name" "$cpu" "$mem_mb";
 done'"#;
 
+/// Sentinel marker that frames each telemetry sample on the long-lived channel.
+/// Format printed by the remote loop is exactly `__HELM_TM_END__:<tag>\n`.
+pub(super) const TELEMETRY_FRAME_SENTINEL: &str = "__HELM_TM_END__:";
+
+/// Long-lived shell loop that replaces N per-tick exec channels with ONE channel.
+/// Reads a tag from stdin (`base` / `process` / `disk` / `ip` / `quit`), runs the
+/// matching collector, then prints `__HELM_TM_END__:<tag>` on its own line as
+/// frame boundary. The Rust side splits on that sentinel to dispatch parses.
+pub(super) const TELEMETRY_LOOP_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
+helm_tm_base() {
+  if read -r up _ < /proc/uptime 2>/dev/null; then printf "UPTIME %.0f\n" "$up"; fi;
+  mem_total=0; mem_free=0; buffers=0; cached=0; sreclaimable=0; shmem=0; swap_total=0; swap_free=0;
+  while read -r key value _; do
+    case "$key" in
+      MemTotal:) mem_total=$((value * 1024));;
+      MemFree:) mem_free=$((value * 1024));;
+      Buffers:) buffers=$((value * 1024));;
+      Cached:) cached=$((value * 1024));;
+      SReclaimable:) sreclaimable=$((value * 1024));;
+      Shmem:) shmem=$((value * 1024));;
+      SwapTotal:) swap_total=$((value * 1024));;
+      SwapFree:) swap_free=$((value * 1024));;
+    esac;
+  done < /proc/meminfo 2>/dev/null;
+  mem_available=$((mem_free + buffers + cached + sreclaimable - shmem));
+  [ "$mem_available" -lt 0 ] && mem_available=0;
+  mem_used=$((mem_total - mem_available));
+  swap_used=$((swap_total - swap_free));
+  printf "MEM %s %s\n" "$mem_total" "$mem_used";
+  printf "SWAP %s %s\n" "$swap_total" "$swap_used";
+  read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat 2>/dev/null;
+  total1=$((user + nice + system + idle + iowait + irq + softirq + steal)); idle1=$((idle + iowait));
+  sleep 0.25;
+  read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat 2>/dev/null;
+  total2=$((user + nice + system + idle + iowait + irq + softirq + steal)); idle2=$((idle + iowait));
+  dt=$((total2 - total1)); di=$((idle2 - idle1));
+  if [ "$dt" -gt 0 ]; then awk -v dt="$dt" -v di="$di" "BEGIN { printf \"CPU %.1f\\n\", (100 * (dt - di)) / dt }"; fi;
+  default_iface="";
+  if [ -r /proc/net/route ]; then
+    while read -r iface dest _; do
+      [ "$dest" = "00000000" ] && { default_iface="$iface"; break; }
+    done < /proc/net/route;
+  fi;
+  best_iface=""; best_rx=0; best_tx=0; best_total=0;
+  while IFS=: read -r iface data; do
+    set -- $data;
+    [ $# -ge 16 ] || continue;
+    iface=$(printf "%s" "$iface" | tr -d " ");
+    [ "$iface" = "lo" ] && continue;
+    rx=$1; tx=$9;
+    [ "$rx" -ge 0 ] 2>/dev/null || continue;
+    [ "$tx" -ge 0 ] 2>/dev/null || continue;
+    if [ "$iface" = "$default_iface" ]; then
+      printf "NET %s %s %s\n" "$iface" "$rx" "$tx";
+      best_iface="";
+      break;
+    fi;
+    total=$((rx + tx));
+    if [ "$total" -gt "$best_total" ]; then
+      best_iface="$iface"; best_rx=$rx; best_tx=$tx; best_total=$total;
+    fi;
+  done < /proc/net/dev 2>/dev/null;
+  [ -n "$best_iface" ] && printf "NET %s %s %s\n" "$best_iface" "$best_rx" "$best_tx";
+};
+helm_tm_ip() {
+  public_ip="";
+  if command -v curl >/dev/null 2>&1; then
+    public_ip=$(curl -4 -fsS --max-time 2 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 2 https://ifconfig.me/ip 2>/dev/null);
+  fi;
+  if [ -z "$public_ip" ] && command -v wget >/dev/null 2>&1; then
+    public_ip=$(wget -4 -qO- -T 2 https://api.ipify.org 2>/dev/null || wget -4 -qO- -T 2 https://ifconfig.me/ip 2>/dev/null);
+  fi;
+  case "$public_ip" in *[!0-9.]*|"") public_ip="";; esac;
+  if [ -n "$public_ip" ]; then
+    printf "IP %s\n" "$public_ip";
+  else
+    set -- $(hostname -I 2>/dev/null); [ -n "$1" ] && printf "IP %s\n" "$1";
+  fi;
+};
+helm_tm_disk() {
+  df -B1 -P 2>/dev/null | while read -r fs total used avail pct mount; do
+    [ "$fs" = "Filesystem" ] && continue;
+    [ "$total" -gt 0 ] 2>/dev/null || continue;
+    printf "DISK %s %s %s\n" "$mount" "$used" "$total";
+  done;
+};
+helm_tm_proc() {
+  ps -eo pid=,comm=,pcpu=,rss= --sort=-pcpu 2>/dev/null | sed -n "1,8p" | while read -r pid name cpu rss; do
+    [ "$pid" -gt 0 ] 2>/dev/null || continue;
+    mem_mb=$((rss / 1024));
+    printf "PROC %s %s %s %s\n" "$pid" "$name" "$cpu" "$mem_mb";
+  done;
+};
+while IFS= read -r helm_tm_tag; do
+  case "$helm_tm_tag" in
+    base) helm_tm_base ;;
+    process) helm_tm_proc ;;
+    disk) helm_tm_disk ;;
+    ip) helm_tm_ip ;;
+    quit) exit 0 ;;
+  esac;
+  printf "__HELM_TM_END__:%s\n" "$helm_tm_tag";
+done'"#;
+
 type RawSshHandle = client::Handle<RemoteClient>;
 pub type SshHandle = Arc<Mutex<RawSshHandle>>;
 type TerminalWriter = ChannelWriteHalf<client::Msg>;

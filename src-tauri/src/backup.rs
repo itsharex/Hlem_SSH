@@ -150,8 +150,7 @@ pub async fn list_configured_backup_records(
     let local_enabled = local_directory
         .as_deref()
         .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        && !cloud.enabled;
+        .unwrap_or(false);
     let cloud_enabled = cloud.enabled;
 
     let local_list = async move {

@@ -449,7 +449,7 @@ impl Default for TerminalOptions {
         Self {
             encoding: "utf-8".to_string(),
             theme: "default".to_string(),
-            keepalive_interval_sec: 30,
+            keepalive_interval_sec: 15,
         }
     }
 }
@@ -458,7 +458,7 @@ impl Default for SshOptions {
     fn default() -> Self {
         Self {
             connect_timeout_ms: 10_000,
-            keepalive_interval_sec: 30,
+            keepalive_interval_sec: 15,
             host_key_fingerprint: None,
             proxy: None,
         }

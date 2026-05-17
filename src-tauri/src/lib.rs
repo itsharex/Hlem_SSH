@@ -14,7 +14,7 @@ use commands::{
     backup_record_restore, backup_records_clear, backup_run_now, config_snapshot, download_update,
     fetch_text_url, forward_list, forward_start_dynamic, forward_start_local,
     forward_start_remote, forward_stop, group_create, group_delete, group_update, install_update,
-    local_expand_paths, open_database_dir, open_external_url, open_path_dir, resolve_vault_path,
+    local_expand_paths, open_database_dir, open_external_url, open_log_dir, open_path_dir, resolve_vault_path,
     session_create, session_delete, session_duplicate, session_update, settings_update, sftp_copy,
     sftp_create_file, sftp_delete, sftp_list, sftp_mkdir, sftp_open, sftp_read_text, sftp_rename,
     sftp_search, sftp_write_text, ssh_connect, ssh_disconnect, ssh_exec, ssh_exec_on_connection,
@@ -50,6 +50,22 @@ fn frontend_ready(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("HelM".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(log::LevelFilter::Info)
+                .level_for("russh", log::LevelFilter::Warn)
+                .level_for("russh::client", log::LevelFilter::Warn)
+                .max_file_size(2 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .build(),
+        )
         .setup(|app| {
             let vault_path = resolve_vault_path(app.handle())?;
             app.manage(AppState::new(vault_path));
@@ -66,6 +82,7 @@ pub fn run() {
             install_update,
             open_database_dir,
             open_external_url,
+            open_log_dir,
             open_path_dir,
             frontend_ready,
             vault_needs_migration,

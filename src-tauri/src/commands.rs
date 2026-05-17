@@ -266,6 +266,18 @@ pub fn open_database_dir(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn open_log_dir(app: AppHandle) -> AppResult<()> {
+    let directory = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| AppError::Io(format!("无法获取日志目录: {}", e)))?;
+    if !directory.exists() {
+        std::fs::create_dir_all(&directory)?;
+    }
+    open_directory(&directory)
+}
+
+#[tauri::command]
 pub fn open_path_dir(path: String) -> AppResult<()> {
     let target = PathBuf::from(path.trim());
     let directory = if target.is_dir() {
@@ -580,7 +592,7 @@ pub async fn backup_run_now(state: State<'_, AppState>) -> AppResult<ConfigSnaps
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    if has_local && !settings.cloud.enabled {
+    if has_local {
         let directory = PathBuf::from(settings.local_directory.as_deref().unwrap().trim());
         let target = directory.join(&file_name);
         match async {
@@ -1374,23 +1386,71 @@ fn generate_api_key() -> String {
 mod tests {
     use super::*;
     use crate::config::VaultData;
+    use tempfile::TempDir;
 
-    #[test]
-    fn app_state_starts_locked() {
-        let state = AppState::new(PathBuf::from("memory-only.rpvault"));
-        let store = state.vault.lock().unwrap();
-        assert!(!store.status().exists);
-        assert!(!store.status().unlocked);
-        assert_eq!(VaultData::with_default_group().version, 1);
-        assert!(VaultData::with_default_group().sessions.is_empty());
+    /// Build an `AppState` rooted in a fresh temp directory. The returned
+    /// `TempDir` must be kept alive for the duration of the test — its `Drop`
+    /// removes the directory and any vault file we created. Using a temp dir
+    /// (instead of a hardcoded relative path) keeps tests isolated from each
+    /// other and from the working directory.
+    fn fresh_state() -> (AppState, TempDir) {
+        let dir = tempfile::tempdir().expect("create tempdir for AppState test");
+        let state = AppState::new(dir.path().join("test.rpvault"));
+        (state, dir)
     }
 
     #[test]
-    fn runtime_command_guard_requires_unlocked_vault() {
-        let state = AppState::new(PathBuf::from("memory-only.rpvault"));
+    fn auto_open_unlocks_a_fresh_vault() {
+        // `AppState::new` runs `auto_open`, which creates the vault file and
+        // unlocks it with the internal AUTO_PASSWORD. Both the existence and
+        // the unlocked flag should be set; `needs_migration` is only true when
+        // an *existing* vault was encrypted with a user password.
+        let (state, _guard) = fresh_state();
+        let store = state.vault.lock().expect("vault mutex");
+        assert!(
+            store.status().exists,
+            "auto_open should have materialized the vault file"
+        );
+        assert!(
+            store.status().unlocked,
+            "a freshly-created vault must be auto-unlocked at startup"
+        );
+        assert!(
+            !state.needs_migration,
+            "a freshly-created vault should never request migration"
+        );
+    }
+
+    #[test]
+    fn vault_data_defaults_have_one_group_and_no_sessions() {
+        let data = VaultData::with_default_group();
+        assert_eq!(data.version, 1);
+        assert_eq!(
+            data.groups.len(),
+            1,
+            "default vault should have exactly one group"
+        );
+        assert!(data.sessions.is_empty());
+    }
+
+    #[test]
+    fn runtime_command_guard_rejects_a_locked_vault() {
+        // After auto_open the vault is unlocked, so the guard would pass. To
+        // exercise the locked branch we explicitly lock it and verify the
+        // guard surfaces `VaultLocked`. This is the invariant Tauri commands
+        // rely on to refuse work when the user has hit "Lock now".
+        let (state, _guard) = fresh_state();
+        state.vault.lock().expect("vault mutex").lock();
         assert!(matches!(
             state.ensure_vault_unlocked(),
             Err(AppError::VaultLocked)
         ));
+    }
+
+    #[test]
+    fn runtime_command_guard_accepts_an_unlocked_vault() {
+        let (state, _guard) = fresh_state();
+        // Default state from auto_open is unlocked — the guard should pass.
+        assert!(state.ensure_vault_unlocked().is_ok());
     }
 }

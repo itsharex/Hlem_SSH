@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop permissions",
   "windows": ["main", "editor-*"],
-  "permissions": ["core:default", "core:webview:allow-create-webview-window", "dialog:default"]
+  "permissions": ["core:default", "core:webview:allow-create-webview-window", "dialog:default", "log:default"]
 }

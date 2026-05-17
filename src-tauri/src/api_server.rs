@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::{
+    body::Body,
     extract::{DefaultBodyLimit, Multipart, Query, State as AxumState},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
@@ -11,10 +12,12 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::{
+    io::AsyncWriteExt,
     net::TcpListener,
     sync::{watch, RwLock},
 };
-use tower_http::cors::CorsLayer;
+use tokio_util::io::ReaderStream;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::config::{BackupRecord, BackupSettings, TunnelConfig, TunnelInput};
 use crate::backup::{backup_file_name, build_backup_package};
@@ -101,6 +104,35 @@ pub async fn start_server(
         log_file: log_file.clone(),
     };
 
+    // Restrict CORS to localhost origins only. The API server binds to 127.0.0.1
+    // so external network origins can't reach it, but a malicious page open in
+    // the user's browser could still issue cross-origin requests. The predicate
+    // accepts http(s)://localhost(:port) and http(s)://127.0.0.1(:port) only.
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+            let Ok(origin_str) = origin.to_str() else {
+                return false;
+            };
+            // Strip scheme then check the host part — accept only localhost / 127.0.0.1
+            // (port is optional). Anything else is denied.
+            let stripped = origin_str
+                .strip_prefix("http://")
+                .or_else(|| origin_str.strip_prefix("https://"));
+            let Some(host_with_port) = stripped else {
+                return false;
+            };
+            let host = host_with_port
+                .split('/')
+                .next()
+                .unwrap_or("")
+                .split(':')
+                .next()
+                .unwrap_or("");
+            matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+        }))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
     let app = Router::new()
         .route("/api/sessions", get(list_sessions))
         .route("/api/exec", post(exec_command))
@@ -118,7 +150,7 @@ pub async fn start_server(
         .route("/api/backup/run", post(run_backup))
         .route("/api/backup/delete", post(delete_backup_record))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state);
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
@@ -432,11 +464,30 @@ async fn upload_file(
     verify_auth(&headers, &key)?;
     drop(key);
 
+    // Stream the multipart body straight to a temp file. Previously the whole
+    // upload was buffered to memory via field.bytes(), which scaled with file
+    // size up to MAX_UPLOAD_BODY (512 MiB). Now memory stays bounded regardless
+    // of file size — only the per-chunk Bytes briefly live in RAM.
     let mut session_id: Option<String> = None;
     let mut remote_path: Option<String> = None;
-    let mut file_data: Option<Vec<u8>> = None;
+    let mut temp_file_path: Option<PathBuf> = None;
+    let mut total_size: u64 = 0;
 
-    while let Some(field) = multipart.next_field().await.unwrap_or(None) {
+    // Helper that wipes the temp file on any error path so we don't leak partial uploads.
+    async fn cleanup_temp(path: &Option<PathBuf>) {
+        if let Some(p) = path.as_ref() {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+    }
+
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: format!("解析 multipart 失败: {}", e),
+            }),
+        )
+    })? {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "sessionId" => {
@@ -446,93 +497,205 @@ async fn upload_file(
                 remote_path = field.text().await.ok();
             }
             "file" => {
-                file_data = field.bytes().await.ok().map(|b| b.to_vec());
+                let temp_dir = std::env::temp_dir();
+                let temp = temp_dir.join(format!("helm_upload_{}", uuid::Uuid::new_v4()));
+                let mut file = match tokio::fs::File::create(&temp).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ApiError {
+                                error: format!("创建临时文件失败: {}", e),
+                            }),
+                        ));
+                    }
+                };
+                temp_file_path = Some(temp);
+
+                // Drain the field one chunk at a time; bail (and clean up) on any IO error.
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if let Err(e) = file.write_all(&chunk).await {
+                                cleanup_temp(&temp_file_path).await;
+                                return Err((
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    Json(ApiError {
+                                        error: format!("写入临时文件失败: {}", e),
+                                    }),
+                                ));
+                            }
+                            total_size = total_size.saturating_add(chunk.len() as u64);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            cleanup_temp(&temp_file_path).await;
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                Json(ApiError {
+                                    error: format!("读取上传分片失败: {}", e),
+                                }),
+                            ));
+                        }
+                    }
+                }
+                if let Err(e) = file.flush().await {
+                    cleanup_temp(&temp_file_path).await;
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: format!("刷写临时文件失败: {}", e),
+                        }),
+                    ));
+                }
             }
             _ => {}
         }
     }
 
-    let session_id = session_id.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 sessionId 字段".to_string(),
-            }),
-        )
-    })?;
-    let remote_path = remote_path.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 remotePath 字段".to_string(),
-            }),
-        )
-    })?;
-    let data = file_data.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 file 字段".to_string(),
-            }),
-        )
-    })?;
+    let session_id = match session_id {
+        Some(v) => v,
+        None => {
+            cleanup_temp(&temp_file_path).await;
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "缺少 sessionId 字段".to_string(),
+                }),
+            ));
+        }
+    };
+    let remote_path = match remote_path {
+        Some(v) => v,
+        None => {
+            cleanup_temp(&temp_file_path).await;
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "缺少 remotePath 字段".to_string(),
+                }),
+            ));
+        }
+    };
+    let temp_file = match temp_file_path.clone() {
+        Some(v) => v,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "缺少 file 字段".to_string(),
+                }),
+            ));
+        }
+    };
 
-    let size = data.len() as u64;
-    verify_session_access(&state, &session_id)?;
-
-    // Write to temp file for the transfer system
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("helm_upload_{}", uuid::Uuid::new_v4()));
-    tokio::fs::write(&temp_file, &data).await.map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ApiError { error: format!("写入临时文件失败: {}", e) }),
-    ))?;
+    let size = total_size;
+    if let Err(forbidden) = verify_session_access(&state, &session_id) {
+        cleanup_temp(&temp_file_path).await;
+        return Err(forbidden);
+    }
 
     // Get sftp_id for this session
-    let sftp_id = state.remote.find_sftp_id_for_session(&session_id).await
-        .map_err(|e| map_remote_error(e, &state))?;
+    let sftp_id = match state.remote.find_sftp_id_for_session(&session_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            cleanup_temp(&temp_file_path).await;
+            return Err(map_remote_error(e, &state));
+        }
+    };
 
     let start = std::time::Instant::now();
-    let transfer_result = state.remote.transfer_upload(
-        &state.app,
-        sftp_id,
-        temp_file.to_string_lossy().to_string(),
-        remote_path.clone(),
-        true,  // overwrite
-        false, // accelerated
-        false, // resume
-    ).await;
+    let transfer_result = state
+        .remote
+        .transfer_upload(
+            &state.app,
+            sftp_id,
+            temp_file.to_string_lossy().to_string(),
+            remote_path.clone(),
+            true,  // overwrite
+            false, // accelerated
+            false, // resume
+        )
+        .await;
     let elapsed_start = start.elapsed().as_millis() as u64;
 
     let transfer_info = match transfer_result {
         Ok(info) => info,
         Err(e) => {
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed_start).await;
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })));
+            cleanup_temp(&temp_file_path).await;
+            push_log(
+                &state,
+                "upload",
+                &friendly_error_detail(&format!("{} → {}", remote_path, e), &state),
+                false,
+                elapsed_start,
+            )
+            .await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            ));
         }
     };
 
     // Wait for transfer to complete
-    let final_info = state.remote.wait_transfer(&transfer_info.transfer_id).await;
+    let final_info = state
+        .remote
+        .wait_transfer(&transfer_info.transfer_id)
+        .await;
     let elapsed = start.elapsed().as_millis() as u64;
 
-    // Clean up temp file
-    let _ = tokio::fs::remove_file(&temp_file).await;
+    // Clean up temp file regardless of outcome
+    cleanup_temp(&temp_file_path).await;
 
     match final_info {
         Ok(info) if matches!(info.status, crate::remote::TaskStatus::Completed) => {
-            push_log(&state, "upload", &format!("{} ({}B)", remote_path, size), true, elapsed).await;
-            Ok(Json(UploadResponse { success: true, remote_path, size }))
+            push_log(
+                &state,
+                "upload",
+                &format!("{} ({}B)", remote_path, size),
+                true,
+                elapsed,
+            )
+            .await;
+            Ok(Json(UploadResponse {
+                success: true,
+                remote_path,
+                size,
+            }))
         }
         Ok(info) => {
             let err_msg = info.error.unwrap_or_else(|| "传输失败".to_string());
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, err_msg), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: err_msg })))
+            push_log(
+                &state,
+                "upload",
+                &friendly_error_detail(&format!("{} → {}", remote_path, err_msg), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: err_msg }),
+            ))
         }
         Err(e) => {
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))
+            push_log(
+                &state,
+                "upload",
+                &friendly_error_detail(&format!("{} → {}", remote_path, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            ))
         }
     }
 }
@@ -569,142 +732,329 @@ async fn download_file(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<DownloadQuery>,
-) -> Result<(StatusCode, HeaderMap, Vec<u8>), (StatusCode, Json<ApiError>)> {
+) -> Result<Response<Body>, (StatusCode, Json<ApiError>)> {
     let key = state.api_key.read().await;
     verify_auth(&headers, &key)?;
     drop(key);
 
     verify_session_access(&state, &query.session_id)?;
 
-    // Get sftp_id for this session
-    let sftp_id = state.remote.find_sftp_id_for_session(&query.session_id).await
-        .map_err(|e| map_remote_error(e, &state))?;
-
-    // Create temp file for download
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("helm_download_{}", uuid::Uuid::new_v4()));
-
     let start = std::time::Instant::now();
-    let transfer_result = state.remote.transfer_download(
-        &state.app,
-        sftp_id,
-        query.path.clone(),
-        temp_file.to_string_lossy().to_string(),
-        true, // overwrite
-    ).await;
 
-    let transfer_info = match transfer_result {
-        Ok(info) => info,
+    // Stream directly from the remote SFTP file into the HTTP body. No temp
+    // file, no intermediate buffer — bytes flow straight from SFTP read calls
+    // into the response. This keeps memory bounded even for multi-GB files.
+    let sftp = match state.remote.find_sftp_for_session(&query.session_id).await {
+        Ok(sftp) => sftp,
+        Err(e) => return Err(map_remote_error(e, &state)),
+    };
+
+    let metadata = match sftp.metadata(query.path.clone()).await {
+        Ok(m) => m,
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as u64;
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })));
+            push_log(
+                &state,
+                "download",
+                &friendly_error_detail(&format!("{} → {}", query.path, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: format!("无法读取远程文件: {}", e),
+                }),
+            ));
+        }
+    };
+    let size = metadata.len();
+
+    let remote_file = match sftp.open(query.path.clone()).await {
+        Ok(f) => f,
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "download",
+                &friendly_error_detail(&format!("{} → {}", query.path, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("打开远程文件失败: {}", e),
+                }),
+            ));
         }
     };
 
-    // Wait for transfer to complete
-    let final_info = state.remote.wait_transfer(&transfer_info.transfer_id).await;
+    // Use 1 MiB chunks: this is large enough to amortize per-chunk overhead but
+    // small enough to keep watermark / TCP buffers happy on slow clients.
+    let stream = ReaderStream::with_capacity(remote_file, 1024 * 1024);
+    let body = Body::from_stream(stream);
+
     let elapsed = start.elapsed().as_millis() as u64;
+    push_log(
+        &state,
+        "download",
+        &format!("{} ({}B, 流式)", query.path, size),
+        true,
+        elapsed,
+    )
+    .await;
 
-    match final_info {
-        Ok(info) if matches!(info.status, crate::remote::TaskStatus::Completed) => {
-            let data = tokio::fs::read(&temp_file).await.map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("读取临时文件失败: {}", e) }))
-            })?;
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            push_log(&state, "download", &format!("{} ({}B)", query.path, data.len()), true, elapsed).await;
+    let file_name = query.path.rsplit('/').next().unwrap_or("file");
+    // file_name may contain non-ASCII; quote safely. Browsers accept "filename=" with
+    // arbitrary bytes inside the quoted-string but reject unescaped CR/LF/quotes. The
+    // SFTP path itself comes from the authenticated client so injection risk is low,
+    // but still strip control chars defensively.
+    let safe_name: String = file_name
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+        .collect();
+    let disposition = format!("attachment; filename=\"{}\"", safe_name);
 
-            let file_name = query.path.rsplit('/').next().unwrap_or("file").to_string();
-            let mut headers = HeaderMap::new();
-            headers.insert("content-type", "application/octet-stream".parse().unwrap());
-            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", file_name).parse().unwrap());
-            Ok((StatusCode::OK, headers, data))
-        }
-        Ok(info) => {
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            let err_msg = info.error.unwrap_or_else(|| "传输失败".to_string());
-            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, err_msg), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: err_msg })))
-        }
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&temp_file).await;
-            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))
-        }
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, size)
+        .body(body)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("构建响应失败: {}", e),
+                }),
+            )
+        })?;
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
     }
+    Ok(response)
 }
 
 
 // ─── Dangerous command filter ──────────────────────────────────────────────────
 
-/// Check if a command matches known dangerous patterns.
-/// Returns Some(reason) if blocked, None if safe.
+/// Check if a command matches known dangerous patterns. The check operates on
+/// the lower-cased full command string and looks for patterns that survive
+/// common evasion attempts:
+///   - shell wrappers: `bash -c "rm -rf /"` / `sh -lc "..."` / etc.
+///   - command substitution: `$(rm -rf /)` / backticks
+///   - command chaining: `foo; rm -rf /` / `foo && rm -rf /`
+///   - find with -delete or -exec rm
+///   - dd / mkfs / wipefs / shred targeting block devices
+///   - chmod/chown -R on system directories
+///   - curl|sh / wget|sh remote-script execution
+///   - shutdown / reboot / halt / poweroff / init
+///   - redirection that overwrites critical system files
+///
+/// Returns `Some(reason)` if blocked, `None` if safe. The check is best-effort —
+/// a determined caller can always evade substring matching (base64 decode + eval,
+/// envvar indirection, ...) so this should be treated as a guardrail against
+/// accidents and obvious abuse, not a security boundary. The Bearer-token auth
+/// + 127.0.0.1 bind are the actual security boundary.
 fn check_dangerous_command(command: &str) -> Option<&'static str> {
     let normalized = command.trim().to_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    // Squeeze whitespace so patterns like "rm  -rf  /" still match "rm -rf /".
+    let squeezed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     let parts: Vec<&str> = normalized.split_whitespace().collect();
 
-    // rm -rf / or rm -rf /*
-    if parts.first() == Some(&"rm") {
-        let args = &parts[1..];
-        let has_rf = args.iter().any(|a| {
-            a.contains('r') && a.contains('f') && a.starts_with('-')
-        });
-        if has_rf {
-            for arg in args {
-                if !arg.starts_with('-') {
-                    let path = arg.trim_matches('"').trim_matches('\'');
-                    if path == "/" || path == "/*" || path == "/." || path == "/.."
-                        || path.starts_with("/ ") || path == "$home" || path == "~"
-                        || normalized.contains("--no-preserve-root")
-                    {
-                        return Some("禁止递归删除根目录或用户家目录");
-                    }
+    // 1. Fork bomb (substring; tolerate optional whitespace between tokens).
+    if squeezed.contains(":(){ :|:& };:")
+        || squeezed.contains(":(){:|:&};:")
+        || normalized.contains(":(){")
+    {
+        return Some("禁止 Fork 炸弹");
+    }
+
+    // 2. Recursive rm on root / system / home — catches direct, wrapped (bash -c),
+    // command-substituted, and chained variants by scanning the whole string.
+    let rm_rf_aliases = ["rm -rf", "rm -fr", "rm -r -f", "rm -f -r"];
+    let has_rm_rf = rm_rf_aliases.iter().any(|p| squeezed.contains(p));
+    if has_rm_rf {
+        if normalized.contains("--no-preserve-root") {
+            return Some("禁止跳过根目录保护删除");
+        }
+        let dangerous_targets = [
+            " /", " /*", " /.", " /..", " ~", " ~/", " $home", " ${home}", " /home",
+            " /root", " /usr", " /etc", " /var", " /boot", " /sys", " /proc", " /lib",
+            " /lib64", " /opt", " /sbin", " /bin",
+        ];
+        for prefix in rm_rf_aliases {
+            for target in dangerous_targets {
+                let needle = format!("{prefix}{target}");
+                if squeezed.contains(&needle) {
+                    return Some("禁止递归删除根/系统目录或用户家目录");
                 }
             }
         }
     }
 
-    // Fork bomb patterns
-    if normalized.contains(":(){ :|:& };:") || normalized.contains(":(){") {
-        return Some("禁止 Fork 炸弹");
+    // 3. find -delete / find -exec rm — whether find is at the start or wrapped
+    // inside a shell -c, the substring will appear in the normalized text.
+    let mentions_find = parts.iter().any(|p| *p == "find") || squeezed.contains(" find ");
+    if mentions_find {
+        if squeezed.contains(" -delete") || squeezed.ends_with(" -delete") {
+            return Some("禁止 find -delete");
+        }
+        if squeezed.contains("-exec rm") || squeezed.contains("-execdir rm") {
+            return Some("禁止 find -exec rm");
+        }
     }
 
-    // mkfs on system disks
-    if normalized.starts_with("mkfs") && (normalized.contains("/dev/sd") || normalized.contains("/dev/nvme") || normalized.contains("/dev/vd")) {
-        return Some("禁止格式化磁盘");
+    // 4. Disk format / wipe / shred on block devices.
+    if squeezed.contains("mkfs.") || squeezed.starts_with("mkfs ") || squeezed.contains(" mkfs ") {
+        if normalized.contains("/dev/sd")
+            || normalized.contains("/dev/nvme")
+            || normalized.contains("/dev/vd")
+            || normalized.contains("/dev/hd")
+            || normalized.contains("/dev/mmc")
+        {
+            return Some("禁止格式化磁盘");
+        }
+    }
+    if squeezed.contains("wipefs ") || squeezed.starts_with("wipefs") {
+        return Some("禁止 wipefs");
+    }
+    if squeezed.contains("shred ")
+        && (normalized.contains("/dev/sd")
+            || normalized.contains("/dev/nvme")
+            || normalized.contains("/dev/vd")
+            || normalized.contains("/dev/hd"))
+    {
+        return Some("禁止 shred 块设备");
     }
 
-    // dd writing to block devices
-    if parts.first() == Some(&"dd") && normalized.contains("of=/dev/") {
+    // 5. dd writing to a block device.
+    let mentions_dd = parts.first().copied() == Some("dd")
+        || squeezed.contains(" dd ")
+        || squeezed.contains(";dd ")
+        || squeezed.contains("&& dd ");
+    if mentions_dd
+        && (normalized.contains("of=/dev/sd")
+            || normalized.contains("of=/dev/nvme")
+            || normalized.contains("of=/dev/vd")
+            || normalized.contains("of=/dev/hd"))
+    {
         return Some("禁止 dd 写入块设备");
     }
 
-    // Redirect to block device
-    if normalized.contains("> /dev/sd") || normalized.contains("> /dev/nvme") || normalized.contains("> /dev/vd") {
+    // 6. Redirect to a block device.
+    if normalized.contains("> /dev/sd")
+        || normalized.contains(">/dev/sd")
+        || normalized.contains("> /dev/nvme")
+        || normalized.contains(">/dev/nvme")
+        || normalized.contains("> /dev/vd")
+        || normalized.contains(">/dev/vd")
+        || normalized.contains("> /dev/hd")
+        || normalized.contains(">/dev/hd")
+    {
         return Some("禁止写入块设备");
     }
 
-    // chmod/chown -R on root
-    if (normalized.starts_with("chmod") || normalized.starts_with("chown"))
-        && normalized.contains("-r")
-        && (normalized.ends_with(" /") || normalized.contains(" / "))
-    {
-        return Some("禁止递归修改根目录权限");
+    // 7. chmod / chown -R targeting system directories.
+    let touches_perm = squeezed.contains("chmod ") || squeezed.contains("chown ");
+    let recursive_flag = squeezed.contains(" -r ")
+        || squeezed.contains(" -rf ")
+        || squeezed.contains(" -fr ")
+        || squeezed.contains(" -r\t")
+        || squeezed.ends_with(" -r");
+    if touches_perm && recursive_flag {
+        let system_dirs = [
+            " /", " /*", " /etc", " /usr", " /var", " /bin", " /sbin", " /lib",
+            " /lib64", " /boot", " /home", " /root", " ~",
+        ];
+        if system_dirs.iter().any(|d| {
+            squeezed.contains(&format!("{d} "))
+                || squeezed.ends_with(d)
+                || squeezed.contains(&format!("{d};"))
+        }) {
+            return Some("禁止递归修改系统目录权限");
+        }
+        // Also catch trailing " /" without a following space (end of string).
+        if squeezed.ends_with(" /") {
+            return Some("禁止递归修改系统目录权限");
+        }
     }
 
-    // Piping remote scripts to shell
-    if (normalized.contains("curl ") || normalized.contains("wget "))
-        && (normalized.contains("| sh") || normalized.contains("| bash")
-            || normalized.contains("|sh") || normalized.contains("|bash")
-            || normalized.contains("| /bin/sh") || normalized.contains("| /bin/bash"))
-    {
+    // 8. curl/wget piped to shell — covers the classic pwn vector. We still
+    // allow `curl url > file` patterns; only piped execution is blocked.
+    let uses_downloader = squeezed.contains("curl ")
+        || squeezed.contains("curl\t")
+        || squeezed.contains("wget ")
+        || squeezed.contains("wget\t");
+    let pipes_to_shell = squeezed.contains("| sh")
+        || squeezed.contains("|sh")
+        || squeezed.contains("| bash")
+        || squeezed.contains("|bash")
+        || squeezed.contains("| zsh")
+        || squeezed.contains("|zsh")
+        || squeezed.contains("| /bin/sh")
+        || squeezed.contains("|/bin/sh")
+        || squeezed.contains("| /bin/bash")
+        || squeezed.contains("|/bin/bash");
+    if uses_downloader && pipes_to_shell {
         return Some("禁止远程下载并直接执行脚本");
     }
 
-    // shutdown / reboot / halt / poweroff
-    if matches!(parts.first(), Some(&"shutdown") | Some(&"reboot") | Some(&"halt") | Some(&"poweroff") | Some(&"init")) {
+    // 9. Power-state change commands. Catch both "first token" and "wrapped".
+    let powerstate_tokens = ["shutdown", "reboot", "halt", "poweroff"];
+    if powerstate_tokens.contains(&parts.first().copied().unwrap_or("")) {
         return Some("禁止关机/重启命令");
+    }
+    for tok in powerstate_tokens {
+        if squeezed.contains(&format!(" {tok} "))
+            || squeezed.contains(&format!(";{tok} "))
+            || squeezed.contains(&format!("&& {tok} "))
+            || squeezed.contains(&format!(" {tok};"))
+            || squeezed.ends_with(&format!(" {tok}"))
+            || squeezed.contains(&format!("\"{tok} "))
+            || squeezed.contains(&format!("'{tok} "))
+        {
+            return Some("禁止关机/重启命令");
+        }
+    }
+    // init 0 / init 6 — catch both bare and wrapped.
+    if squeezed.contains("init 0")
+        || squeezed.contains("init 6")
+        || parts.first().copied() == Some("init")
+            && matches!(parts.get(1).copied(), Some("0") | Some("6"))
+    {
+        return Some("禁止关机/重启命令");
+    }
+
+    // 10. Truncating critical system files via redirection.
+    let critical_files = [
+        "/etc/passwd",
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/etc/fstab",
+        "/etc/hosts",
+        "/etc/ssh/sshd_config",
+        "/boot/grub/grub.cfg",
+    ];
+    for cf in critical_files {
+        // Match `> /etc/passwd` and `>/etc/passwd`. Distinguish from `>>` (append).
+        let single_space = format!("> {cf}");
+        let single_nospace = format!(">{cf}");
+        let append_space = format!(">> {cf}");
+        let append_nospace = format!(">>{cf}");
+        // Truncate-only matches: contains the redirect-without-double-arrow pattern.
+        let has_truncate = (normalized.contains(&single_space) && !normalized.contains(&append_space))
+            || (normalized.contains(&single_nospace) && !normalized.contains(&append_nospace));
+        if has_truncate {
+            return Some("禁止覆盖关键系统文件");
+        }
     }
 
     None

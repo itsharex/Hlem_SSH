@@ -1,8 +1,9 @@
-import { ClearOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined } from "@ant-design/icons";
+import { ClearOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +20,8 @@ interface TerminalPanelProps {
   onSendCommand: (command: string) => void;
   onResize: (cols: number, rows: number) => void;
   onClear: () => void;
+  onReopenTerminal?: () => void;
+  onReconnect?: () => void;
   onInputHistoryChange: (history: InputHistoryEntry[]) => void;
 }
 
@@ -34,7 +37,7 @@ type InputHistoryEntry = {
 
 const INPUT_HISTORY_LIMIT = 15;
 
-export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onSendCommand, onResize, onClear, onInputHistoryChange }: TerminalPanelProps) {
+export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onSendCommand, onResize, onClear, onReopenTerminal, onReconnect, onInputHistoryChange }: TerminalPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; selectedText: string } | null>(null);
   const [actionFlash, setActionFlash] = useState<"paste" | "copyAll" | "clear" | "history" | null>(null);
   const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => mergeInputHistory(loadInputHistory(), inputHistoryProp));
@@ -147,6 +150,18 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
       void appApi.openExternalUrl(url);
     }));
     terminal.open(host);
+    // 接入 WebGL renderer，避免 DOM renderer 在 display:none -> block 切换时
+    // 的暂停-重画跳变；加载失败（旧显卡/驱动）自动回退到默认 DOM renderer。
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        // GPU 上下文丢失时主动 dispose，xterm 会自动切回 DOM renderer
+        webgl.dispose();
+      });
+      terminal.loadAddon(webgl);
+    } catch (err) {
+      console.warn("[TerminalPanel] WebGL renderer 加载失败，已回退到 DOM renderer", err);
+    }
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
@@ -565,6 +580,47 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
         }}
       >
         <div ref={terminalHostRef} className="terminalHost" />
+        {connected && !session.terminalId && session.connectionId && onReopenTerminal ? (
+          <div className="terminalReopenOverlay">
+            <Button
+              type="primary"
+              icon={<ReloadOutlined />}
+              size="middle"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReopenTerminal();
+              }}
+            >
+              重新打开终端
+            </Button>
+            <span className="terminalReopenHint">
+              SSH 连接仍在线，点击可重新开启 shell 通道（无需断开整个会话）
+            </span>
+          </div>
+        ) : null}
+        {!connected && (session.state === "disconnected" || session.state === "failed") && onReconnect ? (
+          <div className="terminalReopenOverlay">
+            <Button
+              type="primary"
+              icon={<ReloadOutlined />}
+              size="middle"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReconnect();
+              }}
+            >
+              重新连接
+            </Button>
+            <span className="terminalReopenHint">
+              {session.state === "failed" ? "上次连接失败，点击重试" : "连接已断开，点击重新建立 SSH 连接"}
+            </span>
+          </div>
+        ) : null}
+        {!connected && session.state === "connecting" ? (
+          <div className="terminalReopenOverlay">
+            <span className="terminalReopenHint">正在连接...</span>
+          </div>
+        ) : null}
         <Dropdown
           open={Boolean(contextMenu)}
           trigger={[]}

@@ -1,19 +1,49 @@
 use super::*;
+use socket2::{SockRef, TcpKeepalive};
+use std::time::Duration;
+
+/// 开启 TCP 层 SO_KEEPALIVE。SSH 应用层 keepalive (russh `keepalive_interval`)
+/// 防御的是"sshd 假死"，但很多 NAT/防火墙只看 TCP 层活跃度，会把空闲连接的
+/// 表项老化掉。TCP keepalive 由内核周期性发送空 ACK 探测包，运营商设备
+/// 不容易识别和丢弃，比应用层探测更稳。
+///
+/// 参数：idle=30s, interval=15s, retries=3 — 在 NAT 表项常见的 60s 老化窗口
+/// 之内一定会有探测流量，并且失败 ~75s 内能感知到。
+fn enable_tcp_keepalive(stream: &TcpStream) {
+    let sock = SockRef::from(stream);
+    let ka = TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(15));
+    // retries 选项仅在 Linux/部分 Unix 可设；Windows 由系统注册表控制重试次数，
+    // 跳过即可。失败不致命：仅是缺失保活探测，连接仍可用。
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "android",
+        target_os = "ios"
+    ))]
+    let ka = ka.with_retries(3);
+    let _ = sock.set_tcp_keepalive(&ka);
+}
 
 pub(super) async fn connect_tcp_for_ssh(
     host: &str,
     port: u16,
     proxy: Option<&SshProxyOptions>,
 ) -> AppResult<TcpStream> {
-    let Some(proxy) = proxy else {
-        return TcpStream::connect((host, port)).await.map_err(remote_error);
+    let stream = match proxy {
+        None => TcpStream::connect((host, port)).await.map_err(remote_error)?,
+        Some(p) => match p.kind.as_str() {
+            "direct" => TcpStream::connect((host, port)).await.map_err(remote_error)?,
+            "socks5" => connect_via_socks5(p, host, port).await?,
+            "httpConnect" => connect_via_http_connect(p, host, port).await?,
+            _ => return Err(AppError::InvalidInput("代理类型无效".to_string())),
+        },
     };
-    match proxy.kind.as_str() {
-        "direct" => TcpStream::connect((host, port)).await.map_err(remote_error),
-        "socks5" => connect_via_socks5(proxy, host, port).await,
-        "httpConnect" => connect_via_http_connect(proxy, host, port).await,
-        _ => Err(AppError::InvalidInput("代理类型无效".to_string())),
-    }
+    enable_tcp_keepalive(&stream);
+    Ok(stream)
 }
 
 pub(super) async fn connect_via_socks5(

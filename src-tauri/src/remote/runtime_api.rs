@@ -102,7 +102,7 @@ impl RemoteRuntime {
             .ok_or_else(|| format!("会话 {} 未连接", session_id))
     }
 
-    async fn find_sftp_for_session(
+    pub(crate) async fn find_sftp_for_session(
         &self,
         session_id: &str,
     ) -> Result<Arc<SftpSession>, String> {

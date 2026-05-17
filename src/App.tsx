@@ -1145,6 +1145,34 @@ function App() {
     updateSession(activeSession.id, (session) => ({ ...session, terminal: [] }));
   }
 
+  async function reopenTerminal(session: RemoteSession) {
+    if (!session.connectionId) {
+      appendTerminal(session.id, "error", "无法重新打开终端：会话尚未连接");
+      return;
+    }
+    if (session.terminalId) return; // 已有活动终端，无需重开
+    appendTerminal(session.id, "system", "正在重新打开终端通道...");
+    try {
+      const terminal = await remoteApi.openTerminal(session.connectionId, 100, 30);
+      terminalSessionMapRef.current.set(terminal.terminalId, session.id);
+      const pendingTerminalEntries = pendingTerminalEntriesRef.current.get(terminal.terminalId);
+      if (pendingTerminalEntries?.length) {
+        pendingTerminalEntriesRef.current.delete(terminal.terminalId);
+      }
+      updateSession(session.id, (item) => ({
+        ...item,
+        terminalId: terminal.terminalId,
+        terminal: [
+          ...item.terminal,
+          ...(pendingTerminalEntries ?? []),
+          createTerminalEntry("system", "终端已重新打开"),
+        ],
+      }));
+    } catch (error) {
+      appendTerminal(session.id, "error", `终端重新打开失败：${getErrorMessage(error)}`);
+    }
+  }
+
   async function changePath(path: string) {
     const session = activeSession;
     if (!session) return;
@@ -1579,6 +1607,8 @@ function App() {
                                   onSendCommand={(command) => void sendTerminalCommand(command)}
                                   onResize={(cols, rows) => void resizeTerminal(sess.terminalId, cols, rows)}
                                   onClear={clearActiveTerminal}
+                                  onReopenTerminal={() => void reopenTerminal(sess)}
+                                  onReconnect={() => void connectSession(sess)}
                                   onInputHistoryChange={saveTerminalInputHistory}
                                 />
                               </div>
