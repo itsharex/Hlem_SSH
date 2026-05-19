@@ -32,6 +32,7 @@ impl RemoteRuntime {
     }
 
     /// Execute a command on a connected session (by session_id).
+    #[allow(dead_code)]
     pub async fn api_exec(
         &self,
         session_id: &str,
@@ -40,6 +41,25 @@ impl RemoteRuntime {
     ) -> Result<ExecResult, String> {
         let connection_id = self.find_connection_for_session(session_id).await?;
         self.exec_on_connection(&connection_id, command.to_string(), Some(timeout_ms))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// 流式执行命令：边跑边把 stdout / stderr chunk 推到 `chunks` 通道。
+    /// 用于 WebSocket `/api/ws` 的 `exec` 请求 —— AI 客户端可以实时看到长命令的输出。
+    pub async fn api_exec_stream(
+        &self,
+        session_id: &str,
+        command: String,
+        timeout_ms: u64,
+        chunks: tokio::sync::mpsc::Sender<ExecStreamChunk>,
+    ) -> Result<ExecStreamSummary, String> {
+        let connection_id = self.find_connection_for_session(session_id).await?;
+        let connection = self
+            .connection(&connection_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        super::ssh::exec_stream_with_handle(&connection.handle, command, timeout_ms, chunks)
             .await
             .map_err(|e| e.to_string())
     }

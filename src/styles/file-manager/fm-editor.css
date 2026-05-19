@@ -1,0 +1,384 @@
+.fileEditorModal .ant-modal-content {
+  overflow: hidden;
+}
+
+.fileEditorModal .ant-modal-body {
+  padding: 0;
+}
+
+.fileEditorModal .ant-modal-header {
+  padding-right: 52px;
+}
+
+.fileEditorTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fileEditorTitle > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileEditorTitle .ant-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 7px !important;
+  box-shadow: none !important;
+}
+
+.fileEditorModal .ant-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #eef2f7;
+  background: #fbfdff;
+}
+
+.fileEditorModal .ant-tabs {
+  margin: 0 16px;
+}
+
+.fileEditorModal .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.fileEditorModal .ant-tabs-tab {
+  padding: 6px 12px !important;
+  font-size: 13px;
+}
+
+.fileEditorModal .ant-tabs-nav::before {
+  border-bottom: 1px solid #eef2f7;
+}
+
+.fileEditorSaveButton,
+.editorPrimarySaveButton {
+  height: 32px !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: #1677ff !important;
+  box-shadow: 0 5px 12px rgba(22, 119, 255, .18) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+.fileEditorSaveButton .ant-btn-icon,
+.fileEditorSaveButton span,
+.editorPrimarySaveButton .ant-btn-icon,
+.editorPrimarySaveButton span {
+  color: #ffffff !important;
+}
+
+.fileEditorSaveButton:hover,
+.editorPrimarySaveButton:hover {
+  background: #2563eb !important;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, .22) !important;
+  color: #ffffff !important;
+}
+
+.fileEditorLoading {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 360px;
+  color: var(--text-secondary);
+}
+
+.codeEditorShell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #e8eef6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.codeEditorToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e8ecf0;
+  background: linear-gradient(to bottom, #fafbfd, #f4f6f9);
+}
+
+.codeEditorToolbar .ant-btn-sm {
+  border-radius: 2px;
+  border-color: #d9dfe6;
+  color: #595959;
+  transition: all 0.2s;
+}
+
+.codeEditorToolbar .ant-btn-sm:hover:not(:disabled) {
+  border-color: #4f6ef7;
+  color: #4f6ef7;
+  background: #f0f5ff;
+}
+
+.codeEditorToolbar .ant-btn-sm:disabled {
+  opacity: 0.4;
+}
+
+.codeEditorInput {
+  width: 150px;
+  border-radius: 2px;
+}
+
+.codeEditorLineInput {
+  width: 78px;
+  border-radius: 2px;
+}
+
+.codeEditorShell .cm-editor {
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  min-width: 0;
+  height: 100%;
+}
+
+.codeEditorShell .cm-scroller {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.codeEditorShell .cm-content,
+.codeEditorShell .cm-line {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.codeEditorShell .cm-line {
+  overflow-wrap: anywhere;
+}
+
+.codeEditorContextMenu {
+  position: fixed;
+  z-index: 2100;
+  display: grid;
+  min-width: 176px;
+  padding: 6px;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+}
+
+.codeEditorContextMenu button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 30px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.codeEditorContextMenu button:hover:not(:disabled) {
+  background: #eef4ff;
+  color: #1558d6;
+}
+
+.codeEditorContextMenu button:disabled {
+  color: #aab3c1;
+  cursor: not-allowed;
+}
+
+.codeEditorContextMenu .anticon,
+.codeEditorMenuIconSlot {
+  display: inline-flex;
+  width: 18px;
+  justify-content: center;
+}
+
+.codeEditorContextDivider {
+  height: 1px;
+  margin: 5px 4px;
+  background: #edf2f7;
+}
+
+.codeEditorContextMenu .codeEditorContextDanger {
+  color: #b42318;
+}
+
+.codeEditorContextMenu .codeEditorContextDanger:hover:not(:disabled) {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.detachedEditorWindow {
+  display: grid;
+  grid-template-rows: 72px minmax(0, 1fr);
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.detachedEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e8eef6;
+  background: #ffffff;
+}
+
+.detachedEditorHeader > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.detachedEditorHeader strong,
+.detachedEditorHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detachedEditorHeader span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.detachedEditorLoading {
+  display: grid;
+  place-items: center;
+}
+
+.detachedEditorBody {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detachedEditorContent {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detachedEditorTabs {
+  margin: 0 12px;
+}
+
+.detachedEditorTabs .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.detachedEditorTabs .ant-tabs-nav::before {
+  border-bottom: none;
+}
+
+.detachedEditorTabs .ant-tabs-tab {
+  padding: 6px 12px;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font-size: 13px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.detachedEditorTabs .ant-tabs-tab .ant-tabs-tab-btn {
+  color: #8c8c8c;
+}
+
+.detachedEditorTabs .ant-tabs-tab:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.detachedEditorTabs .ant-tabs-tab:hover .ant-tabs-tab-btn {
+  color: #595959;
+}
+
+.detachedEditorTabs .ant-tabs-tab-active {
+  background: #d6e4ff !important;
+  border-bottom: 2px solid #4f6ef7 !important;
+}
+
+.detachedEditorTabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #4f6ef7 !important;
+  font-weight: 500;
+}
+
+.detachedEditorTabs .ant-tabs-tab-remove {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #999;
+}
+
+.detachedEditorTabs .ant-tabs-tab-remove:hover {
+  color: #ff4d4f;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  height: 3px;
+}
+
+.detachedEditorTabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+.detachedEditorTabs .ant-tabs-nav-list {
+  gap: 2px;
+}
+
+.detachedEditorTabs .ant-tabs-ink-bar {
+  display: none;
+}
+
+.detachedEditorTabs .ant-tabs-content-holder {
+  display: none;
+}
+
+.editorHeaderSession {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  border: 1px solid;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.editorTabDisconnected {
+  color: #ff4d4f;
+  opacity: 0.7;
+}
+
+.editorTabSession {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #999;
+  background: #f0f0f0;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+

@@ -51,6 +51,16 @@ pub(super) async fn authenticate(
     }
 }
 
+/// 单次 channel_open_session 的硬超时。若 SSH session 已经静默死亡，russh 自身要等
+/// `keepalive_interval × keepalive_max ≈ 45s` 才会把 handle 标记 closed；在那之前
+/// `channel_open_session().await` 会一直挂着。这里挂载在 `handle.lock()` 之内，
+/// 一旦超时就放锁、释放整条排队，避免一个挂死请求拖垮所有并发。
+const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// AutoClosingChannel::drop 里 spawn 的 close 任务的硬超时。若 SSH 已死，
+/// `channel.close().await` 永不返回，会泄漏 tokio task。给它套一层 5s 超时止血。
+const CHANNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(super) async fn exec_with_handle(
     handle: &SshHandle,
     command: String,
@@ -61,7 +71,17 @@ pub(super) async fn exec_with_handle(
     let future = async {
         let channel = {
             let handle = handle.lock().await;
-            handle.channel_open_session().await.map_err(remote_error)?
+            // 给 channel_open 加短超时：连接静默死亡时早早释放 handle Mutex，
+            // 避免后续请求一起被 russh 的 ~45s keepalive_max 阻塞。
+            match timeout(CHANNEL_OPEN_TIMEOUT, handle.channel_open_session()).await {
+                Ok(Ok(channel)) => channel,
+                Ok(Err(error)) => return Err(remote_error(error)),
+                Err(_) => {
+                    return Err(AppError::Remote(
+                        "打开 SSH 通道超时（连接可能已断开）".to_string(),
+                    ))
+                }
+            }
         };
         let mut channel = AutoClosingChannel::new(channel);
         channel.exec(command).await.map_err(remote_error)?;
@@ -123,8 +143,82 @@ impl Drop for AutoClosingChannel {
     fn drop(&mut self) {
         if let Some(channel) = self.0.take() {
             tokio::spawn(async move {
-                let _ = channel.close().await;
+                // 套一层 5s 超时：SSH 已死时 close().await 永不返回，会让本任务永久挂起，
+                // 长跑场景下每次 exec 超时都泄漏一个 tokio task。
+                let _ = timeout(CHANNEL_CLOSE_TIMEOUT, channel.close()).await;
             });
         }
+    }
+}
+
+// 暴露一个流式版本给 WebSocket 通道使用：边执行边把 stdout/stderr 帧推给上游，
+// 不再等命令结束才一次性返回。和 `exec_with_handle` 共享 channel_open 短超时
+// 与 AutoClosingChannel drop 行为，所以稳定性修复对它同样生效。
+pub(super) async fn exec_stream_with_handle(
+    handle: &SshHandle,
+    command: String,
+    timeout_ms: u64,
+    chunks: tokio::sync::mpsc::Sender<super::ExecStreamChunk>,
+) -> AppResult<super::ExecStreamSummary> {
+    let started = Instant::now();
+    let timeout_duration = Duration::from_millis(timeout_ms.max(1));
+
+    let future = async {
+        let channel = {
+            let handle = handle.lock().await;
+            match timeout(CHANNEL_OPEN_TIMEOUT, handle.channel_open_session()).await {
+                Ok(Ok(channel)) => channel,
+                Ok(Err(error)) => return Err(remote_error(error)),
+                Err(_) => {
+                    return Err(AppError::Remote(
+                        "打开 SSH 通道超时（连接可能已断开）".to_string(),
+                    ))
+                }
+            }
+        };
+        let mut channel = AutoClosingChannel::new(channel);
+        channel.exec(command).await.map_err(remote_error)?;
+
+        let mut exit_status: Option<u32> = None;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Data { data } => {
+                    // 接收端关闭说明客户端不再关心，停止读取以让远端早点收尾。
+                    if chunks
+                        .send(super::ExecStreamChunk::Stdout(data.to_vec()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                ChannelMsg::ExtendedData { data, .. } => {
+                    if chunks
+                        .send(super::ExecStreamChunk::Stderr(data.to_vec()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                ChannelMsg::ExitStatus { exit_status: code } => exit_status = Some(code),
+                _ => {}
+            }
+        }
+        Ok::<_, AppError>(exit_status)
+    };
+
+    match timeout(timeout_duration, future).await {
+        Ok(Ok(exit_status)) => Ok(super::ExecStreamSummary {
+            exit_status,
+            duration_ms: started.elapsed().as_millis() as u64,
+            timed_out: false,
+        }),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(super::ExecStreamSummary {
+            exit_status: Some(124),
+            duration_ms: started.elapsed().as_millis() as u64,
+            timed_out: true,
+        }),
     }
 }

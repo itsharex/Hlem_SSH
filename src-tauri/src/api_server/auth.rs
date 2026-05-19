@@ -1,0 +1,35 @@
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Json;
+
+use super::{ApiError, ApiServerState};
+
+pub(super) fn verify_auth(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let token = auth.strip_prefix("Bearer ").unwrap_or("");
+    if token != expected {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "无效的 API Key".to_string(),
+            }),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn verify_session_access(state: &ApiServerState, session_id: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if let Some(allowed) = &state.allowed_session_id {
+        if allowed != session_id {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError {
+                    error: format!("无权访问会话 {}，仅允许访问指定会话", session_id),
+                }),
+            ));
+        }
+    }
+    Ok(())
+}

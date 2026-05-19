@@ -68,7 +68,17 @@ pub fn run() {
         )
         .setup(|app| {
             let vault_path = resolve_vault_path(app.handle())?;
-            app.manage(AppState::new(vault_path));
+            let state = AppState::new(vault_path);
+            // 启动死连接巡检：每 30s 扫描 SSH 连接表，把 russh keepalive_max 已经
+            // 标记 closed 的僵尸连接清掉。修复"AI API 长跑后假死、必须手动重连"。
+            // 注意：setup 闭包运行在主线程（非 Tokio 上下文），不能直接 tokio::spawn，
+            // 需要通过 tauri::async_runtime::spawn 提交到 Tauri 管理的 Tokio runtime。
+            let remote = state.remote().clone();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                remote.spawn_dead_connection_reaper(app_handle);
+            });
+            app.manage(state);
             configure_main_window(app);
             create_tray(app)?;
             Ok(())

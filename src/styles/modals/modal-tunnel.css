@@ -1,0 +1,263 @@
+/* ─── 隧道配置 Modal（新建/编辑隧道）─────────────────────────────────────── */
+.tunnelConfigModal .ant-modal-body {
+  padding-top: 4px;
+}
+
+.tunnelConfigModal .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.tunnelConfigModal .ant-form-item-label > label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .2px;
+}
+
+.tunnelConfigModal .ant-input,
+.tunnelConfigModal .ant-input-number,
+.tunnelConfigModal .ant-select-selector {
+  border-radius: var(--radius) !important;
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .85) !important;
+  transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+/* 避免带 affix wrapper（allowClear/prefix/suffix）时出现双框 */
+.tunnelConfigModal .ant-input-affix-wrapper > .ant-input {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tunnelConfigModal .ant-input:hover,
+.tunnelConfigModal .ant-input-number:not(.ant-input-number-disabled):hover,
+.tunnelConfigModal .ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: rgba(99, 102, 241, .4) !important;
+  background: #ffffff !important;
+}
+
+.tunnelConfigModal .ant-input:focus,
+.tunnelConfigModal .ant-input-number-focused,
+.tunnelConfigModal .ant-select-focused .ant-select-selector {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, .15) !important;
+  background: #ffffff !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn,
+.tunnelModal .ant-modal-footer .ant-btn,
+.backupModal .ant-modal-footer .ant-btn {
+  height: 36px;
+  padding: 0 22px;
+  border-radius: var(--radius) !important;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-default,
+.tunnelModal .ant-modal-footer .ant-btn-default,
+.backupModal .ant-modal-footer .ant-btn-default {
+  border: 1px solid rgba(221, 230, 241, .9) !important;
+  background: rgba(255, 255, 255, .9) !important;
+  color: var(--text-secondary) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-default:hover,
+.tunnelModal .ant-modal-footer .ant-btn-default:hover,
+.backupModal .ant-modal-footer .ant-btn-default:hover {
+  border-color: rgba(99, 102, 241, .35) !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+  transform: translateY(-1px);
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-primary,
+.tunnelModal .ant-modal-footer .ant-btn-primary,
+.backupModal .ant-modal-footer .ant-btn-primary {
+  border: 0 !important;
+  background: var(--accent-grad) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px -4px rgba(99, 102, 241, .5) !important;
+}
+
+.tunnelConfigModal .ant-modal-footer .ant-btn-primary:hover,
+.tunnelModal .ant-modal-footer .ant-btn-primary:hover,
+.backupModal .ant-modal-footer .ant-btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 10px 22px -6px rgba(99, 102, 241, .6) !important;
+}
+
+/* ─── 新建/编辑隧道：现代布局 ─────────────────────────────────────────── */
+.tunnelConfigModal .ant-modal-content {
+  padding: 0;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.tunnelConfigModal .ant-modal-header,
+.tunnelConfigModal .ant-modal-title {
+  display: none;
+}
+
+.tunnelConfigModal .ant-modal-body {
+  padding: 0;
+}
+
+.tunnelConfigModal .ant-modal-footer {
+  display: none;
+}
+
+.tunnelConfigHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(59, 130, 246, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.tunnelConfigHeaderIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%);
+  color: #fff;
+  font-size: 18px;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+  flex: 0 0 auto;
+}
+
+.tunnelConfigHeaderMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tunnelConfigLabel {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.tunnelConfigTitle {
+  font-size: 16px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.tunnelConfigForm {
+  padding: 18px 24px 0;
+}
+
+.tunnelConfigSection {
+  position: relative;
+  padding: 14px 14px 4px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 12px;
+  background: #ffffff;
+  margin-bottom: 14px;
+}
+
+.tunnelConfigSection + .tunnelConfigSection {
+  margin-top: 0;
+}
+
+.tunnelConfigSection--hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-color: rgba(99, 102, 241, 0.2);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.tunnelConfigSection--hint .anticon {
+  color: #6366f1;
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+
+.tunnelConfigSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.tunnelConfigSectionTitle .anticon {
+  color: #6366f1;
+  font-size: 14px;
+}
+
+.tunnelConfigSectionHint {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 999px;
+  letter-spacing: 0.2px;
+}
+
+.tunnelConfigSectionHint .anticon {
+  font-size: 11px;
+  color: #6366f1;
+}
+
+.tunnelConfigRow {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.tunnelConfigRow .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.tunnelConfigFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px 20px;
+  border-top: 1px solid rgba(226, 232, 240, 0.8);
+  background: #fafbfc;
+}
+
+.tunnelConfigFooter .ant-btn {
+  height: 36px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.tunnelConfigFooter .ant-btn-primary {
+  background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%);
+  border: 0;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.tunnelConfigFooter .ant-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
+  filter: brightness(1.04);
+}
+

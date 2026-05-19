@@ -1,58 +1,31 @@
 import {
   ArrowUpOutlined,
-  BookOutlined,
   CodeOutlined,
-  DatabaseOutlined,
-  DeleteOutlined,
-  DownOutlined,
-  EditOutlined,
-  FileTextOutlined,
-  ExportOutlined,
-  FileExcelOutlined,
-  FileImageOutlined,
-  FileMarkdownOutlined,
-  FileOutlined,
-  FilePdfOutlined,
-  FilePptOutlined,
-  FileWordOutlined,
-  FileZipOutlined,
-  FolderAddOutlined,
-  FolderOutlined,
   LoadingOutlined,
-  PlaySquareOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
-  SettingOutlined,
   TagOutlined,
   ThunderboltOutlined,
-  UpOutlined,
 } from "@ant-design/icons";
-import { App as AntdApp, Button, Dropdown, Form, Input, Modal, Radio, Space, Spin, Table, Tooltip, Tree } from "antd";
+import { App as AntdApp, Button, Dropdown, Form, Input, Modal, Table, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { DataNode } from "antd/es/tree";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { writeClipboardText } from "../lib/clipboard";
 import { formatFileSize } from "../lib/format";
 import { getErrorMessage } from "../lib/configMapping";
 import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "../lib/editorChannel";
-import { getParentPath, getPathSegments, joinPath, normalizePath } from "../lib/path";
+import { getParentPath, joinPath, normalizePath } from "../lib/path";
 import { isTauriRuntime } from "../api/runtime";
+import { sortRemoteEntries, compareEntryGroup, compareEntryName, formatBeijingModifiedTime } from "../lib/fileClassify";
+import { fileCategoryMeta } from "./fileManager/fileIcons";
+import { QuickCommandTopArea } from "./fileManager/QuickCommandPanel";
+import { FileDialogs, operationLabel, type FileDialogState } from "./fileManager/FileDialogs";
+import { DirectoryTree, buildTreeData, getDirectoryAncestorPaths, uniqueKeys } from "./fileManager/DirectoryTree";
 import type { QuickCommand, RemoteFileEntry, RemoteSession } from "../types";
 
-
-const beijingTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
 
 interface FileManagerProps {
   session: RemoteSession;
@@ -79,27 +52,7 @@ export type FileOperation =
   | { kind: "move"; sourcePath: string; targetPath: string }
   | { kind: "delete"; sourcePath: string };
 
-type FileDialogState =
-  | { kind: "create"; entryType: "file" | "directory"; name: string }
-  | { kind: "rename"; entry: RemoteFileEntry; value: string }
-  | { kind: "copy"; entry: RemoteFileEntry; value: string }
-  | { kind: "move"; entry: RemoteFileEntry; value: string };
-
 type ContextMenuState = { entry: RemoteFileEntry; x: number; y: number };
-type FileCategory =
-  | "directory"
-  | "archive"
-  | "script"
-  | "document"
-  | "log"
-  | "text"
-  | "media"
-  | "env"
-  | "config"
-  | "data"
-  | "binary"
-  | "symlink"
-  | "other";
 
 const baseColumns: ColumnsType<RemoteFileEntry> = [
   {
@@ -366,18 +319,6 @@ export function FileManager({
       current.includes(targetPath) ? current.filter((key) => key !== targetPath) : uniqueKeys([...current, targetPath]),
     );
     if (!isExpanded) void loadDirectory(targetPath);
-  }
-
-  function openDirectoryFromTree(directoryPath: string) {
-    const targetPath = normalizePath(directoryPath);
-    onPathChange(targetPath);
-    setSearchText("");
-    setFocusedPath(null);
-    setSelectedRowKeys([]);
-  }
-
-  function isTreeSwitcherClick(target: EventTarget | null) {
-    return target instanceof HTMLElement && Boolean(target.closest(".ant-tree-switcher"));
   }
 
   useEffect(() => {
@@ -819,51 +760,21 @@ export function FileManager({
         </QuickCommandTopArea>
 
         <div className="fileContent" ref={contentRef}>
-          <div className="pathTree">
-            {canUseFiles ? (
-              <>
-                <button
-                  type="button"
-                  className={`pathTreeRoot${path === "/" ? " pathTreeRoot-selected" : ""}`}
-                  onClick={() => {
-                    onPathChange("/");
-                    setSearchText("");
-                    setFocusedPath(null);
-                    setDirectoryExpandedKeys((current) => uniqueKeys(["/", ...current]));
-                    void loadDirectory("/");
-                  }}
-                >
-                  <FolderOutlined />
-                  <span>/</span>
-                </button>
-                <Tree
-                  className="pathTreeList"
-                  showIcon
-                  blockNode
-                  virtual={false}
-                  expandAction={false}
-                  selectedKeys={path === "/" ? [] : [path]}
-                  expandedKeys={directoryExpandedKeys}
-                  treeData={treeData}
-                  switcherIcon={({ isLeaf }) => (isLeaf ? null : <span className="pathTreeChevron" />)}
-                  loadData={(node) => loadDirectory(String(node.key))}
-                  onExpand={(keys, info) => {
-                    setDirectoryExpandedKeys(keys.map(String));
-                    if (info.expanded) void loadDirectory(String(info.node.key));
-                  }}
-                  onClick={(event, node) => {
-                    if (isTreeSwitcherClick(event.target)) return;
-                    openDirectoryFromTree(String(node.key));
-                  }}
-                />
-              </>
-            ) : (
-              <div className="pathTreeUnavailable">
-                <FolderOutlined />
-                <span>SFTP 未连接</span>
-              </div>
-            )}
-          </div>
+          <DirectoryTree
+            canUseFiles={canUseFiles}
+            path={path}
+            directoryEntries={directoryEntries}
+            directoryExpandedKeys={directoryExpandedKeys}
+            directoryLoadingKeys={directoryLoadingKeys}
+            onPathChange={(p) => {
+              onPathChange(p);
+              setSearchText("");
+              setFocusedPath(null);
+              setSelectedRowKeys([]);
+            }}
+            onLoadDirectory={(p) => void loadDirectory(p)}
+            onExpandChange={(keys) => setDirectoryExpandedKeys(keys)}
+          />
           <div
             className={`fileTableSurface${canUseFiles ? "" : " fileTableSurface-disabled"}`}
             onClick={() => setContextMenu(null)}
@@ -1009,341 +920,22 @@ export function FileManager({
           </Button>
         </div>
       </Modal>
-      <Modal
-        open={Boolean(dialog)}
-        title={dialogTitle(dialog)}
-        okText="执行"
-        cancelText="取消"
-        onCancel={() => setDialog(null)}
-        onOk={submitDialog}
-        destroyOnHidden
-        className="fileOperationModal"
-      >
-        {dialog?.kind === "create" && (
-          <Form layout="vertical">
-            <Form.Item label="类型">
-              <Radio.Group
-                value={dialog.entryType}
-                onChange={(event) => setDialog({ ...dialog, entryType: event.target.value })}
-                options={[
-                  { label: "文件", value: "file" },
-                  { label: "目录", value: "directory" },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item label="名称">
-              <Input
-                autoFocus
-                placeholder={dialog.entryType === "file" ? "new-file.txt" : "new-folder"}
-                value={dialog.name}
-                onChange={(event) => setDialog({ ...dialog, name: event.target.value })}
-                onPressEnter={submitDialog}
-              />
-            </Form.Item>
-          </Form>
-        )}
-        {dialog?.kind === "rename" && (
-          <Form layout="vertical">
-            <Form.Item label="新名称">
-              <Input
-                autoFocus
-                value={dialog.value}
-                onChange={(event) => setDialog({ ...dialog, value: event.target.value })}
-                onPressEnter={submitDialog}
-              />
-            </Form.Item>
-          </Form>
-        )}
-        {(dialog?.kind === "copy" || dialog?.kind === "move") && (
-          <Form layout="vertical">
-            <div className="fileOperationTree">
-              <Tree
-                showIcon
-                blockNode
-                virtual={false}
-                expandAction={false}
-                selectedKeys={[dialog.value]}
-                expandedKeys={directoryExpandedKeys}
-                treeData={treeData}
-                switcherIcon={({ isLeaf }) => (isLeaf ? null : <span className="pathTreeChevron" />)}
-                loadData={(node) => loadDirectory(String(node.key))}
-                onExpand={(keys, info) => {
-                  setDirectoryExpandedKeys(keys.map(String));
-                  if (info.expanded) void loadDirectory(String(info.node.key));
-                }}
-                onClick={(event, node) => {
-                  if (isTreeSwitcherClick(event.target)) return;
-                  const selectedPath = normalizePath(String(node.key));
-                  setDialog({ ...dialog, value: selectedPath });
-                  toggleDirectory(selectedPath);
-                }}
-              />
-            </div>
-            <Form.Item label={dialog.kind === "copy" ? "复制到路径" : "移动到路径"}>
-              <Input
-                autoFocus
-                prefix={<FolderAddOutlined />}
-                placeholder="/目标目录/或/完整目标路径"
-                value={dialog.value}
-                onChange={(event) => {
-                  setDialog({ ...dialog, value: event.target.value });
-                  setDirectoryExpandedKeys((current) => uniqueKeys([...current, ...getDirectoryAncestorPaths(event.target.value)]));
-                }}
-                onPressEnter={submitDialog}
-              />
-            </Form.Item>
-            <div className="fileOperationHint">可以从目录树选择，也可以输入目录或完整目标路径。</div>
-          </Form>
-        )}
-      </Modal>
+      <FileDialogs
+        dialog={dialog}
+        treeData={treeData}
+        directoryExpandedKeys={directoryExpandedKeys}
+        onDialogChange={setDialog}
+        onSubmit={submitDialog}
+        onLoadDirectory={(p) => void loadDirectory(p)}
+        onExpandChange={(keys) => setDirectoryExpandedKeys(keys)}
+        onTreeSelect={(selectedPath) => {
+          const np = normalizePath(selectedPath);
+          setDialog((d) => d && (d.kind === "copy" || d.kind === "move") ? { ...d, value: np } : d);
+          toggleDirectory(np);
+        }}
+      />
     </section>
   );
-}
-
-type QuickCommandPreviewState = {
-  command: QuickCommand;
-  left: number;
-  top: number;
-  width: number;
-};
-
-interface QuickCommandTopAreaProps {
-  children: ReactNode;
-  commandItems: QuickCommand[];
-  onSendCommand: (command: QuickCommand) => void | Promise<void>;
-  onEditCommand: (command?: QuickCommand) => void;
-  onDeleteCommand: (command: QuickCommand) => void;
-}
-
-function QuickCommandTopArea({ children, commandItems, onSendCommand, onEditCommand, onDeleteCommand }: QuickCommandTopAreaProps) {
-  const [open, setOpen] = useState(false);
-  const [preview, setPreview] = useState<QuickCommandPreviewState | null>(null);
-
-  function hidePreview() {
-    setPreview(null);
-  }
-
-  function toggleOpen() {
-    hidePreview();
-    setOpen((current) => !current);
-  }
-
-  function showPreview(command: QuickCommand, node: HTMLElement) {
-    const rect = node.getBoundingClientRect();
-    const viewportWidth = Math.max(320, window.innerWidth);
-    const width = Math.min(viewportWidth - 32, command.command.length > 72 ? 650 : 420);
-    const left = Math.min(Math.max(16, rect.left), Math.max(16, viewportWidth - width - 16));
-    const estimatedHeight = command.createdAt ? 132 : 96;
-    const belowTop = rect.bottom + 8;
-    const top = belowTop + estimatedHeight > window.innerHeight ? Math.max(16, rect.top - estimatedHeight - 8) : belowTop;
-    setPreview({ command, left, top, width });
-  }
-
-  function runCommand(command: QuickCommand) {
-    hidePreview();
-    void onSendCommand(command);
-  }
-
-  return (
-    <div className="fileTopArea">
-      <div className="fileToolbar">
-        <Space className="fileToolbarActions" size={4}>
-          <Tooltip title="常用命令">
-            <Button
-              aria-label="常用命令"
-              className={`fileCommandDropdownButton${open ? " fileCommandDropdownButton-active" : ""}`}
-              icon={<CodeOutlined />}
-              size="small"
-              onClick={toggleOpen}
-            >
-              {open ? <UpOutlined className="fileToolbarDropdownArrow" /> : <DownOutlined className="fileToolbarDropdownArrow" />}
-            </Button>
-          </Tooltip>
-          {children}
-        </Space>
-      </div>
-
-      <div className={`quickCommandDrawer${open ? " quickCommandDrawer-open" : ""}`}>
-        <div className="quickCommandDrawerHeader">
-          <span className="quickCommandDrawerTitle">
-            <CodeOutlined />
-            常用命令
-            <small>({commandItems.length})</small>
-          </span>
-          <button type="button" className="quickCommandAdd" onClick={() => onEditCommand()}>
-            <PlusOutlined />
-            <span>添加</span>
-          </button>
-        </div>
-        <div className="quickCommandScrollList" onMouseLeave={hidePreview} onScroll={hidePreview}>
-          {commandItems.length === 0 ? (
-            <div className="quickCommandEmpty">暂无命令，点击上方添加</div>
-          ) : (
-            commandItems.map((item) => (
-              <span
-                key={item.id}
-                className="quickCommandTag"
-                role="button"
-                tabIndex={0}
-                onClick={() => runCommand(item)}
-                onFocus={(event) => showPreview(item, event.currentTarget)}
-                onMouseEnter={(event) => showPreview(item, event.currentTarget)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") runCommand(item);
-                }}
-              >
-                {item.name}
-                <span className="quickCommandTagActions">
-                  <Button
-                    aria-label={`编辑 ${item.name}`}
-                    size="small"
-                    type="text"
-                    icon={<EditOutlined />}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      hidePreview();
-                      onEditCommand(item);
-                    }}
-                  />
-                  <Button
-                    aria-label={`删除 ${item.name}`}
-                    size="small"
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      hidePreview();
-                      onDeleteCommand(item);
-                    }}
-                  />
-                </span>
-              </span>
-            ))
-          )}
-        </div>
-      </div>
-
-      {open && preview ? (
-        <div
-          className="quickCommandHoverPreview"
-          style={{ left: preview.left, top: preview.top, width: preview.width }}
-          aria-hidden="true"
-        >
-          {quickCommandDetailTooltip(preview.command)}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function dialogTitle(dialog: FileDialogState | null) {
-  if (!dialog) return "";
-  if (dialog.kind === "create") return "新建文件或目录";
-  if (dialog.kind === "rename") return "重命名";
-  if (dialog.kind === "copy") return "复制到";
-  return "移动到";
-}
-
-function getFileName(path: string) {
-  return path.split("/").filter(Boolean).pop() || path || "文件";
-}
-
-function operationLabel(operation: FileOperation) {
-  if (operation.kind === "create") return operation.entryType === "directory" ? "新建目录" : "新建文件";
-  if (operation.kind === "rename") return "重命名";
-  if (operation.kind === "copy") return "复制";
-  if (operation.kind === "move") return "移动";
-  return "删除";
-}
-
-function buildTreeData(
-  entriesByPath: Record<string, RemoteFileEntry[]>,
-  currentPath: string,
-  loadingKeys: Set<string>,
-): DataNode[] {
-  const normalizedCurrentPath = normalizePath(currentPath);
-  const rootChildren = buildDirectoryChildren("/", entriesByPath, normalizedCurrentPath, loadingKeys, new Set(["/"]));
-  if (rootChildren.length > 0) return rootChildren;
-  return [buildDirectoryNode("/", entriesByPath, normalizedCurrentPath, loadingKeys, new Set())];
-}
-
-function buildDirectoryNode(
-  directoryPath: string,
-  entriesByPath: Record<string, RemoteFileEntry[]>,
-  currentPath: string,
-  loadingKeys: Set<string>,
-  ancestors: Set<string>,
-): DataNode {
-  const normalizedPath = normalizePath(directoryPath);
-  const entries = entriesByPath[normalizedPath];
-  const loading = loadingKeys.has(normalizedPath);
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(normalizedPath);
-  const children = buildDirectoryChildren(normalizedPath, entriesByPath, currentPath, loadingKeys, nextAncestors);
-  return {
-    title: getDirectoryTitle(normalizedPath),
-    key: normalizedPath,
-    icon: loading ? <LoadingOutlined /> : <FolderOutlined />,
-    isLeaf: Boolean(entries) && children.length === 0,
-    ...(children.length > 0 ? { children } : {}),
-  };
-}
-
-function buildDirectoryChildren(
-  directoryPath: string,
-  entriesByPath: Record<string, RemoteFileEntry[]>,
-  currentPath: string,
-  loadingKeys: Set<string>,
-  ancestors: Set<string>,
-): DataNode[] {
-  const childPaths = new Map<string, string>();
-  const entries = entriesByPath[directoryPath] ?? [];
-  for (const entry of entries) {
-    if (entry.fileType !== "directory") continue;
-    if (!entry.name || entry.name === "." || entry.name === "..") continue;
-    const childPath = normalizePath(entry.path || joinPath(directoryPath, entry.name));
-    if (getParentPath(childPath) !== directoryPath) continue;
-    if (childPath === directoryPath || ancestors.has(childPath)) continue;
-    childPaths.set(childPath, entry.name);
-  }
-
-  const activeChildPath = getActiveChildPath(directoryPath, currentPath);
-  if (activeChildPath && activeChildPath !== directoryPath && !ancestors.has(activeChildPath) && !childPaths.has(activeChildPath)) {
-    childPaths.set(activeChildPath, getDirectoryTitle(activeChildPath));
-  }
-
-  return Array.from(childPaths.keys())
-    .sort(comparePathName)
-    .map((childPath) => buildDirectoryNode(childPath, entriesByPath, currentPath, loadingKeys, ancestors));
-}
-
-function getActiveChildPath(directoryPath: string, currentPath: string) {
-  const parentSegments = getPathSegments(directoryPath);
-  const currentSegments = getPathSegments(currentPath);
-  if (parentSegments.length >= currentSegments.length) return null;
-  if (parentSegments.some((segment, index) => segment !== currentSegments[index])) return null;
-  return joinPath(directoryPath, currentSegments[parentSegments.length]);
-}
-
-function getDirectoryTitle(path: string) {
-  const segments = getPathSegments(path);
-  return segments[segments.length - 1] ?? "/";
-}
-
-function getDirectoryAncestorPaths(path: string) {
-  const segments = getPathSegments(path);
-  const paths = ["/"];
-  let current = "/";
-  for (const segment of segments) {
-    current = joinPath(current, segment);
-    paths.push(current);
-  }
-  return paths;
-}
-
-function uniqueKeys(keys: string[]) {
-  return Array.from(new Set(keys));
 }
 
 function filesBelongToDirectory(files: RemoteFileEntry[], directoryPath: string) {
@@ -1354,116 +946,4 @@ function filesBelongToDirectory(files: RemoteFileEntry[], directoryPath: string)
   });
 }
 
-function sortRemoteEntries(entries: RemoteFileEntry[]) {
-  return [...entries].sort((a, b) => compareEntryGroup(a, b) || compareEntryName(a, b));
-}
 
-function compareEntryGroup(a: RemoteFileEntry, b: RemoteFileEntry) {
-  return entryGroupWeight(a) - entryGroupWeight(b);
-}
-
-function entryGroupWeight(entry: RemoteFileEntry) {
-  if (entry.fileType === "directory") return 0;
-  if (entry.fileType === "file") return 1;
-  if (entry.fileType === "symlink") return 2;
-  return 3;
-}
-
-function compareEntryName(a: RemoteFileEntry, b: RemoteFileEntry) {
-  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-}
-
-function fileCategoryMeta(entry: RemoteFileEntry): {
-  category: FileCategory;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-} {
-  const category = fileCategory(entry);
-  const map: Record<FileCategory, { label: string; description: string; icon: React.ReactNode }> = {
-    directory: { label: "文件夹", description: "目录", icon: <FolderOutlined style={{ color: "#faad14" }} /> },
-    archive: { label: "压缩包", description: "压缩包 / 归档文件", icon: <FileZipOutlined style={{ color: "#fa8c16" }} /> },
-    script: { label: "脚本", description: "Shell / Python / Node / PowerShell 等脚本", icon: <CodeOutlined style={{ color: "#52c41a" }} /> },
-    document: { label: "文档", description: "Markdown / PDF / Office / README 等文档", icon: documentIcon(entry.name) },
-    log: { label: "日志", description: "日志文件", icon: <BookOutlined style={{ color: "#8c8c8c" }} /> },
-    text: { label: "文本", description: "纯文本文件", icon: <FileTextOutlined style={{ color: "#595959" }} /> },
-    media: { label: "媒体", description: "图片 / 音频 / 视频文件", icon: <FileImageOutlined style={{ color: "#13c2c2" }} /> },
-    env: { label: "环境变量", description: "环境变量或 dotenv 配置", icon: <SettingOutlined style={{ color: "#fa8c16" }} /> },
-    config: { label: "配置", description: "配置文件", icon: <SettingOutlined style={{ color: "#722ed1" }} /> },
-    data: { label: "数据", description: "JSON / YAML / CSV / SQL 等数据文件", icon: <DatabaseOutlined style={{ color: "#1890ff" }} /> },
-    binary: { label: "可执行", description: "可执行程序或二进制文件", icon: <PlaySquareOutlined style={{ color: "#f5222d" }} /> },
-    symlink: { label: "链接", description: "符号链接", icon: <ExportOutlined style={{ color: "#2f54eb" }} /> },
-    other: { label: "文件", description: "普通文件", icon: <FileTextOutlined style={{ color: "#8c8c8c" }} /> },
-  };
-  return { category, ...map[category] };
-}
-
-function fileCategory(entry: RemoteFileEntry): FileCategory {
-  if (entry.fileType === "directory") return "directory";
-  if (entry.fileType === "symlink") return "symlink";
-  const name = entry.name.toLowerCase();
-  const ext = fileExtension(name);
-  if (isEnvFile(name)) return "env";
-  if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "war", "apk", "deb", "rpm", "dmg", "iso", "cab", "lz", "zst"].includes(ext)) return "archive";
-  if (["sh", "bash", "zsh", "fish", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "lua", "rb", "pl", "php", "go", "rs", "c", "cpp", "h", "java", "kt", "swift", "r", "m"].includes(ext)) return "script";
-  if (["md", "markdown", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "odt", "ods", "odp", "pages", "numbers", "key", "epub"].includes(ext) || /^readme(?:\.|$)/.test(name)) return "document";
-  if (["log", "out", "err", "trace"].includes(ext) || name.endsWith(".log.1")) return "log";
-  if (["txt", "text", "ini", "conf", "properties", "service"].includes(ext)) return "text";
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff", "tif", "psd", "ai", "raw", "cr2", "nef", "heic", "avif", "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "opus"].includes(ext)) return "media";
-  if (["json", "yaml", "yml", "toml", "xml", "csv", "tsv", "sql", "db", "sqlite", "parquet", "avro", "proto", "graphql"].includes(ext)) return "data";
-  if (["config", "cnf", "cfg", "htaccess", "editorconfig", "gitignore", "dockerignore"].includes(ext) || ["dockerfile", "nginx.conf", "package.json", "tsconfig.json", "makefile", "cmakelists.txt", "vagrantfile"].includes(name)) return "config";
-  if (["exe", "bin", "run", "appimage", "msi", "dll", "so", "dylib", "a", "o", "elf", "com"].includes(ext) || isExecutable(entry)) return "binary";
-  return "other";
-}
-
-function fileExtension(name: string) {
-  const trimmed = name.replace(/\.+$/g, "");
-  const index = trimmed.lastIndexOf(".");
-  return index > 0 ? trimmed.slice(index + 1) : "";
-}
-
-function isEnvFile(name: string) {
-  return name === ".env" || name.startsWith(".env.") || name.endsWith(".env");
-}
-
-function isExecutable(entry: RemoteFileEntry) {
-  return entry.fileType === "file" && /x/.test(entry.permissions.slice(1));
-}
-
-function documentIcon(name: string) {
-  const ext = fileExtension(name.toLowerCase());
-  if (ext === "md" || ext === "markdown") return <FileMarkdownOutlined style={{ color: "#1890ff" }} />;
-  if (ext === "pdf") return <FilePdfOutlined style={{ color: "#f5222d" }} />;
-  if (["xls", "xlsx", "ods", "numbers", "csv"].includes(ext)) return <FileExcelOutlined style={{ color: "#52c41a" }} />;
-  if (["ppt", "pptx", "odp", "key"].includes(ext)) return <FilePptOutlined style={{ color: "#fa541c" }} />;
-  if (["doc", "docx", "odt", "pages", "rtf"].includes(ext)) return <FileWordOutlined style={{ color: "#1890ff" }} />;
-  return <FileTextOutlined style={{ color: "#722ed1" }} />;
-}
-
-function formatBeijingModifiedTime(value: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const parts = beijingTimeFormatter.formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
-}
-
-function quickCommandDetailTooltip(command: QuickCommand) {
-  return (
-    <div className="detailHoverPanel">
-      <div className="detailHoverTitle">{command.name}</div>
-      <div className="detailHoverCommand">{command.command}</div>
-      {command.createdAt && (
-        <div className="detailHoverGrid">
-          <span>创建时间</span>
-          <strong>{formatBeijingModifiedTime(command.createdAt)}</strong>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function comparePathName(a: string, b: string) {
-  return getDirectoryTitle(a).localeCompare(getDirectoryTitle(b), undefined, { numeric: true, sensitivity: "base" });
-}

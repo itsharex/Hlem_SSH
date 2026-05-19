@@ -181,6 +181,65 @@ impl RemoteRuntime {
         self.close_all_orphans(app).await;
     }
 
+    /// 启动死连接巡检后台任务。每 30s 扫描一次 `connections`，对每个 Connected 状态的
+    /// 记录尝试 `try_lock + is_closed()`：如果 russh 已经把 handle 标记 closed
+    /// （keepalive_max 触发后），则把它当作"假死连接"清理掉并 emit Disconnected
+    /// 事件，让前端的"重新连接"按钮能正常出现。
+    ///
+    /// 之前只有 `runtime_terminal` 的 reader task 退出时才会做这件事，意味着
+    /// 用户只用 AI API 不开终端的场景下，僵尸连接永远不会被清理 —— 这是 AI API
+    /// 长跑后"假死"的主因之一。
+    pub fn spawn_dead_connection_reaper(&self, app: AppHandle) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(30));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // 跳过启动时立即触发的第一次 tick。
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                runtime.reap_dead_connections(&app).await;
+            }
+        });
+    }
+
+    async fn reap_dead_connections(&self, app: &AppHandle) {
+        // Phase 1: 在 read 锁内只做识别，不持有任何 handle Mutex 太久。
+        // 用 try_lock，拿不到说明此刻有人在用（活的），下轮再查；不会和正常请求打架。
+        let dead_ids: Vec<String> = {
+            let connections = self.connections.read().await;
+            let mut victims = Vec::new();
+            for (id, record) in connections.iter() {
+                if record.info.status != RuntimeStatus::Connected {
+                    continue;
+                }
+                let dead = match record.handle.try_lock() {
+                    Ok(guard) => guard.is_closed(),
+                    Err(_) => false,
+                };
+                if dead {
+                    victims.push(id.clone());
+                }
+            }
+            victims
+        };
+        if dead_ids.is_empty() {
+            return;
+        }
+
+        // Phase 2: 逐个 remove + emit。和 runtime_terminal 末尾的死连接清理路径保持一致。
+        for id in dead_ids {
+            let removed = self.connections.write().await.remove(&id);
+            if let Some(record) = removed {
+                self.close_children_for_connection(app, &record).await;
+                let mut info = record.info;
+                info.status = RuntimeStatus::Disconnected;
+                events::emit(app, events::SSH_STATUS, info);
+                crate::errors::forget_resource_label(&id);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub async fn ensure_no_stale_handles(&self) -> bool {
         self.connections.read().await.is_empty()

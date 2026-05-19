@@ -1,34 +1,61 @@
-import { CheckOutlined, CopyOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, CopyOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Empty, Tooltip, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useEffect, useRef, useState } from "react";
 import { appApi, type ApiLogEntry } from "../api/appApi";
+import { appEvents } from "../api/appEvents";
 
 export function LogWindowApp() {
   const [logs, setLogs] = useState<ApiLogEntry[]>([]);
   const [copied, setCopied] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
-  const hoverTimerRef = useRef<number | null>(null);
+  const [detailCopied, setDetailCopied] = useState(false);
+  const [selectedLog, setSelectedLog] = useState<ApiLogEntry | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const poll = () => void appApi.apiServerLogs().then(setLogs).catch(() => undefined);
-    poll();
-    const timer = setInterval(poll, 500);
-    return () => clearInterval(timer);
+    // 启动时拉取一次全量历史；之后通过 api://log 事件增量推送。
+    // 加 5s fallback 轮询兜底（子窗口可能因 capabilities 限制收不到 emit 事件）。
+    const load = () => void appApi.apiServerLogs().then(setLogs).catch(() => undefined);
+    load();
+    let mounted = true;
+    let unlisten: (() => void) | null = null;
+    let fallbackTimer: number | null = null;
+    void appEvents.onApiLog((entry) => {
+      if (!mounted) return;
+      // 收到推送说明事件通道正常，停掉 fallback 轮询
+      if (fallbackTimer !== null) { clearInterval(fallbackTimer); fallbackTimer = null; }
+      setLogs((prev) => {
+        const next = [...prev, entry];
+        return next.length > 100 ? next.slice(next.length - 100) : next;
+      });
+    }).then((u) => {
+      if (!mounted) { u(); return; }
+      unlisten = u;
+      // 注册成功后启动 fallback：如果 5s 内没收到任何事件，开始轮询
+      fallbackTimer = window.setInterval(load, 5000);
+    }).catch(() => {
+      // listen 失败，直接用轮询
+      if (mounted) fallbackTimer = window.setInterval(load, 3000);
+    });
+    return () => {
+      mounted = false;
+      if (unlisten) unlisten();
+      if (fallbackTimer !== null) clearInterval(fallbackTimer);
+    };
   }, []);
 
   const reversed = [...logs].reverse();
 
   function copyLogs() {
     if (logs.length === 0) return;
-    const lines = reversed.map((log) => {
-      const status = log.success ? "OK" : "ERR";
-      return `[${formatLogTime(log.timestamp)}] [${status}] ${log.action} | ${log.detail} | ${log.durationMs}ms`;
-    });
-    const text = lines.join("\n");
+    const text = reversed.map((log) => {
+      const lines = [
+        `[${formatLogTime(log.timestamp)}] ${log.success ? "OK" : "ERR"} ${log.action} | ${log.detail} (${log.durationMs}ms)`,
+        ...(log.response ? [log.response] : []),
+      ];
+      return lines.join("\n");
+    }).join("\n\n");
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -36,36 +63,23 @@ export function LogWindowApp() {
   }
 
   function copySingleLog(log: ApiLogEntry, index: number) {
-    const status = log.success ? "OK" : "ERR";
-    const text = `[${formatLogTime(log.timestamp)}] [${status}] ${log.action} | ${log.detail} | ${log.durationMs}ms${log.response ? "\n" + log.response : ""}`;
-    void navigator.clipboard.writeText(text).then(() => {
+    const lines = [
+      `时间: ${formatLogTime(log.timestamp)}`,
+      `状态: ${log.success ? "成功" : "失败"}`,
+      `类型: ${log.action}`,
+      `命令: ${log.detail}`,
+      `耗时: ${log.durationMs}ms`,
+      ...(log.response ? [`\n--- 响应 ---\n${log.response}`] : []),
+    ];
+    void navigator.clipboard.writeText(lines.join("\n")).then(() => {
       setCopiedIndex(index);
       setTimeout(() => setCopiedIndex(null), 1500);
     });
   }
 
-  function handleMouseEnter(index: number, event: React.MouseEvent) {
-    if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const listRect = listRef.current?.getBoundingClientRect();
-    const top = rect.bottom - (listRect?.top ?? 0) + 4;
-    const left = 12;
-    hoverTimerRef.current = window.setTimeout(() => {
-      setHoverIndex(index);
-      setPopoverPos({ top, left });
-    }, 300);
+  function handleClick(log: ApiLogEntry) {
+    setSelectedLog(log);
   }
-
-  function handleMouseLeave() {
-    if (hoverTimerRef.current !== null) {
-      window.clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-    setHoverIndex(null);
-    setPopoverPos(null);
-  }
-
-  const hoveredLog = hoverIndex !== null ? reversed[hoverIndex] : null;
 
   return (
     <ConfigProvider locale={zhCN} theme={{ algorithm: theme.defaultAlgorithm }}>
@@ -96,8 +110,8 @@ export function LogWindowApp() {
                 <div
                   key={i}
                   className={`aiApiLogItem aiApiLogItem-${log.success ? "ok" : "err"}`}
-                  onMouseEnter={(e) => handleMouseEnter(i, e)}
-                  onMouseLeave={handleMouseLeave}
+                  onClick={() => handleClick(log)}
+                  style={{ cursor: "pointer" }}
                 >
                   <span className="aiApiLogTime">{formatLogTime(log.timestamp)}</span>
                   <span className={`aiApiLogAction aiApiLogAction-${log.action}`}>{log.action.toUpperCase()}</span>
@@ -117,29 +131,65 @@ export function LogWindowApp() {
               ))}
             </div>
           )}
-          {hoveredLog && popoverPos && (
-            <div
-              className="logDetailPopover"
-              style={{ top: popoverPos.top, left: popoverPos.left }}
-              onMouseEnter={() => { if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current); }}
-              onMouseLeave={handleMouseLeave}
-            >
-              <div className="logDetailSection">
-                <span className="logDetailLabel">命令</span>
-                <pre className="logDetailCommand">{hoveredLog.detail}</pre>
-              </div>
-              {hoveredLog.response && (
-                <div className="logDetailSection">
-                  <span className="logDetailLabel">响应</span>
-                  <pre className="logDetailResponse">{hoveredLog.response}</pre>
+          {selectedLog && (
+            <div className="logDetailModal-overlay" onClick={() => { setSelectedLog(null); setDetailCopied(false); }}>
+              <div className="logDetailModal" onClick={(e) => e.stopPropagation()}>
+                <div className="logDetailModalHeader">
+                  <span className="logDetailModalTitle">日志详情</span>
+                  <span
+                    className="logDetailModalClose"
+                    role="button"
+                    tabIndex={0}
+                    title="关闭"
+                    onClick={() => { setSelectedLog(null); setDetailCopied(false); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { setSelectedLog(null); setDetailCopied(false); } }}
+                  >
+                    <CloseOutlined />
+                  </span>
                 </div>
-              )}
-              <div className="logDetailMeta">
-                <span>{formatLogTime(hoveredLog.timestamp)}</span>
-                <span>{hoveredLog.durationMs}ms</span>
-                <span className={hoveredLog.success ? "logDetailMetaOk" : "logDetailMetaErr"}>
-                  {hoveredLog.success ? "成功" : "失败"}
-                </span>
+                <div className="logDetailSection">
+                  <div className="logDetailLabelRow">
+                    <span className="logDetailLabel">命令</span>
+                    <span
+                      className={`aiApiLogCopy${detailCopied ? " aiApiLogCopy-done" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      title="复制此条"
+                      style={{ opacity: 1 }}
+                      onClick={() => {
+                        const lines = [
+                          `时间: ${formatLogTime(selectedLog.timestamp)}`,
+                          `状态: ${selectedLog.success ? "成功" : "失败"}`,
+                          `类型: ${selectedLog.action}`,
+                          `命令: ${selectedLog.detail}`,
+                          `耗时: ${selectedLog.durationMs}ms`,
+                          ...(selectedLog.response ? [`\n--- 响应 ---\n${selectedLog.response}`] : []),
+                        ];
+                        void navigator.clipboard.writeText(lines.join("\n")).then(() => {
+                          setDetailCopied(true);
+                          setTimeout(() => setDetailCopied(false), 1500);
+                        });
+                      }}
+                      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.click(); }}
+                    >
+                      {detailCopied ? <CheckOutlined /> : <CopyOutlined />}
+                    </span>
+                  </div>
+                  <pre className="logDetailCommand">{selectedLog.detail}</pre>
+                </div>
+                {selectedLog.response && (
+                  <div className="logDetailSection">
+                    <span className="logDetailLabel">响应</span>
+                    <pre className="logDetailResponse">{selectedLog.response}</pre>
+                  </div>
+                )}
+                <div className="logDetailMeta">
+                  <span>{formatLogTime(selectedLog.timestamp)}</span>
+                  <span>{selectedLog.durationMs}ms</span>
+                  <span className={selectedLog.success ? "logDetailMetaOk" : "logDetailMetaErr"}>
+                    {selectedLog.success ? "成功" : "失败"}
+                  </span>
+                </div>
               </div>
             </div>
           )}

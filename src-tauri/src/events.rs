@@ -12,6 +12,7 @@ pub const TELEMETRY_SNAPSHOT: &str = "telemetry://snapshot";
 pub const FORWARD_STATUS: &str = "forward://status";
 pub const HOST_KEY_VERIFY: &str = "host-key://verify";
 pub const TRAY_ACTION: &str = "tray://action";
+pub const API_LOG: &str = "api://log";
 
 pub fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: T) {
     let _ = app.emit(event, payload);

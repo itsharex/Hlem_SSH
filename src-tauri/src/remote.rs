@@ -345,6 +345,21 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
+/// 单次流式 exec 推给上游的一个增量帧。WS `/api/ws` 的 `exec` 类型请求边收边推。
+#[derive(Debug, Clone)]
+pub enum ExecStreamChunk {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+}
+
+/// 流式 exec 收尾时的摘要信息。
+#[derive(Debug, Clone)]
+pub struct ExecStreamSummary {
+    pub exit_status: Option<u32>,
+    pub duration_ms: u64,
+    pub timed_out: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferInfo {

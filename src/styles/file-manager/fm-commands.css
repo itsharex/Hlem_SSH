@@ -1,0 +1,284 @@
+/* ─── 常用命令折叠抽屉面板 ───────────────────────────────────────────── */
+.quickCommandDrawer {
+  height: 0;
+  border-bottom: 1px solid transparent;
+  background: linear-gradient(180deg, #f1f5ff 0%, #f8faff 100%);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity .14s ease, transform .14s ease, border-color .14s ease;
+  contain: layout paint style;
+}
+
+.quickCommandDrawer-open {
+  height: auto;
+  border-bottom-color: rgba(99, 102, 241, .2);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.quickCommandDrawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(221, 230, 241, .6);
+  background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
+}
+
+.quickCommandDrawerTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+
+.quickCommandDrawerTitle .anticon {
+  font-size: 13px;
+}
+
+.quickCommandDrawerTitle small {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.quickCommandDrawer .quickCommandAdd {
+  width: auto;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(99, 102, 241, .2);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .8);
+  color: var(--accent);
+  font-size: 12px;
+  gap: 5px;
+  transition: all .18s;
+}
+
+.quickCommandDrawer .quickCommandAdd:hover {
+  background: #ffffff;
+  border-color: rgba(99, 102, 241, .45);
+  box-shadow: 0 3px 8px -2px rgba(99, 102, 241, .2);
+}
+
+.quickCommandDrawer .quickCommandScrollList {
+  max-height: calc(min(190px, 38vh) - 34px);
+  overflow-y: auto;
+  padding: 8px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .35) transparent;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  contain: content;
+}
+
+.quickCommandDrawer .quickCommandScrollList::-webkit-scrollbar {
+  width: 5px;
+}
+
+.quickCommandDrawer .quickCommandScrollList::-webkit-scrollbar-thumb {
+  border-radius: 10px;
+  background: rgba(99, 102, 241, .22);
+}
+
+.quickCommandDrawer .quickCommandTag {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(99, 102, 241, .18);
+  border-radius: 14px;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .18s, border-color .18s, box-shadow .18s;
+  position: relative;
+  overflow: hidden;
+  min-width: 108px;
+  max-width: 220px;
+}
+
+.quickCommandDrawer .quickCommandTag:hover {
+  background: #f5f6fe;
+  border-color: rgba(99, 102, 241, .4);
+  box-shadow: 0 2px 6px -1px rgba(99, 102, 241, .15);
+}
+
+.quickCommandDrawer .quickCommandTag:active {
+  box-shadow: none;
+}
+
+.quickCommandDrawer .quickCommandTagActions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 18px;
+  background: linear-gradient(to right, rgba(245, 246, 254, 0) 0%, #f5f6fe 18px, #f5f6fe 100%);
+  border-radius: 0 13px 13px 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+
+.quickCommandDrawer .quickCommandTag:hover .quickCommandTagActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.quickCommandDrawer .quickCommandTagActions .ant-btn-sm {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  font-size: 11px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.quickCommandDrawer .quickCommandTagActions .ant-btn-sm:hover {
+  background: rgba(99, 102, 241, .16) !important;
+}
+
+.quickCommandDrawer .quickCommandTagActions .ant-btn-dangerous:hover {
+  background: rgba(239, 68, 68, .12) !important;
+}
+
+.quickCommandDrawer .quickCommandTagActions .ant-btn-sm .anticon {
+  font-size: 12px;
+}
+
+.quickCommandDrawer .quickCommandEmpty {
+  width: 100%;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 16px 0;
+}
+
+.fileContent .ant-table-header th {
+  white-space: nowrap;
+}
+
+.fileContent .ant-table-tbody > tr > td {
+  height: 54px;
+}
+
+.fileSearchLoading {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* 表格深度美化 */
+.ant-table-wrapper .ant-table {
+  background: transparent !important;
+}
+
+.ant-table-thead > tr > th {
+  background: linear-gradient(180deg, rgba(248, 250, 252, .96) 0%, rgba(241, 245, 249, .96) 100%) !important;
+  color: var(--text-secondary) !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+  text-transform: uppercase !important;
+  letter-spacing: .8px !important;
+  border-bottom: 1px solid rgba(221, 230, 241, .8) !important;
+  padding: 12px 16px !important;
+  position: relative;
+}
+
+.ant-table-thead > tr > th::before {
+  display: none !important;
+}
+
+/* —— 列宽拖拽手柄 + 列分隔 —— */
+.ant-table-thead > tr > th {
+  position: relative;
+}
+
+.ant-table-thead > tr > th:not(:last-child)::after {
+  content: none;
+  display: none;
+}
+
+.columnResizer {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 4;
+  user-select: none;
+  touch-action: none;
+}
+
+.columnResizer::before {
+  content: "";
+  position: absolute;
+  right: 3px;
+  top: 18%;
+  bottom: 18%;
+  width: 2px;
+  background: rgba(99, 102, 241, 0);
+  border-radius: 999px;
+  transition: background .18s, right .18s;
+  pointer-events: none;
+}
+
+.columnResizer:hover::before {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .55) 0%, rgba(139, 92, 246, .55) 100%);
+  right: 2px;
+  box-shadow: 0 0 8px rgba(99, 102, 241, .35);
+}
+
+.columnResizer:active::before {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .85) 0%, rgba(139, 92, 246, .85) 100%);
+  box-shadow: 0 0 12px rgba(99, 102, 241, .55);
+}
+
+body.isResizingColumn,
+body.isResizingColumn * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.isResizingColumn .ant-table-cell {
+  pointer-events: none;
+}
+
+.ant-table-tbody > tr > td {
+  padding: 12px 16px !important;
+  border-bottom: 1px solid rgba(241, 245, 249, .8) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: linear-gradient(90deg,
+    rgba(99, 102, 241, .04) 0%,
+    rgba(99, 102, 241, .09) 50%,
+    rgba(139, 92, 246, .04) 100%) !important;
+}
+
+.ant-table-tbody > tr.fileTableRow-focused > td,
+.ant-table-tbody > tr.fileTableRow-focused:hover > td {
+  background: linear-gradient(90deg,
+    rgba(16, 185, 129, .08) 0%,
+    rgba(16, 185, 129, .14) 50%,
+    rgba(16, 185, 129, .08) 100%) !important;
+  box-shadow: inset 3px 0 0 var(--success), 0 0 12px rgba(16, 185, 129, .15);
+}
+

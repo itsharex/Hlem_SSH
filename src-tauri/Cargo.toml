@@ -22,8 +22,9 @@ hex = "0.4"
 hmac = "0.12"
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 russh = "0.60.2"
 russh-sftp = "2.1.2"
 serde = { version = "1", features = ["derive"] }

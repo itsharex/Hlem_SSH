@@ -1,0 +1,128 @@
+.fileName {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  letter-spacing: .1px;
+}
+
+.fileName .anticon {
+  font-size: 19px;
+  color: var(--file-icon-color, var(--accent));
+  filter: drop-shadow(0 3px 6px var(--file-icon-shadow, rgba(99, 102, 241, .28)));
+  transition: all .25s cubic-bezier(.4, 0, .2, 1);
+}
+
+.fileName-directory {
+  --file-icon-color: #f59e0b;
+  --file-icon-hover: #f97316;
+  --file-icon-shadow: rgba(245, 158, 11, .35);
+}
+
+.fileName-archive {
+  --file-icon-color: #a855f7;
+  --file-icon-hover: #9333ea;
+  --file-icon-shadow: rgba(168, 85, 247, .32);
+}
+
+.fileName-script,
+.fileName-binary {
+  --file-icon-color: #2563eb;
+  --file-icon-hover: #1d4ed8;
+  --file-icon-shadow: rgba(37, 99, 235, .3);
+}
+
+.fileName-document,
+.fileName-text {
+  --file-icon-color: #0891b2;
+  --file-icon-hover: #0e7490;
+  --file-icon-shadow: rgba(8, 145, 178, .28);
+}
+
+.fileName-log {
+  --file-icon-color: #64748b;
+  --file-icon-hover: #475569;
+  --file-icon-shadow: rgba(100, 116, 139, .24);
+}
+
+.fileName-media {
+  --file-icon-color: #db2777;
+  --file-icon-hover: #be185d;
+  --file-icon-shadow: rgba(219, 39, 119, .28);
+}
+
+.fileName-env,
+.fileName-config {
+  --file-icon-color: #059669;
+  --file-icon-hover: #047857;
+  --file-icon-shadow: rgba(5, 150, 105, .28);
+}
+
+.fileName-data {
+  --file-icon-color: #7c3aed;
+  --file-icon-hover: #6d28d9;
+  --file-icon-shadow: rgba(124, 58, 237, .28);
+}
+
+.fileName-cert {
+  --file-icon-color: #d48806;
+  --file-icon-hover: #ad6800;
+  --file-icon-shadow: rgba(212, 136, 6, .28);
+}
+
+.fileName-symlink {
+  --file-icon-color: #0f766e;
+  --file-icon-hover: #115e59;
+  --file-icon-shadow: rgba(15, 118, 110, .28);
+}
+
+.fileName-other {
+  --file-icon-color: var(--accent);
+  --file-icon-hover: var(--accent-2);
+  --file-icon-shadow: rgba(99, 102, 241, .28);
+}
+
+.ant-table-tbody > tr:hover .fileName .anticon {
+  color: var(--file-icon-hover, var(--accent-2));
+  transform: scale(1.08) rotate(-3deg);
+  filter: drop-shadow(0 5px 8px var(--file-icon-shadow, rgba(99, 102, 241, .45)));
+}
+
+.fileTypeBadge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid rgba(148, 163, 184, .3);
+  border-radius: 6px;
+  background: rgba(248, 250, 252, .72);
+  color: var(--file-type-color, var(--text-secondary));
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileTypeBadge-archive { --file-type-color: #7e22ce; background: rgba(243, 232, 255, .58); border-color: rgba(168, 85, 247, .28); }
+.fileTypeBadge-script,
+.fileTypeBadge-binary { --file-type-color: #1d4ed8; background: rgba(219, 234, 254, .62); border-color: rgba(37, 99, 235, .24); }
+.fileTypeBadge-document,
+.fileTypeBadge-text { --file-type-color: #0e7490; background: rgba(207, 250, 254, .45); border-color: rgba(8, 145, 178, .22); }
+.fileTypeBadge-log { --file-type-color: #475569; background: rgba(241, 245, 249, .8); border-color: rgba(100, 116, 139, .22); }
+.fileTypeBadge-media { --file-type-color: #be185d; background: rgba(252, 231, 243, .58); border-color: rgba(219, 39, 119, .22); }
+.fileTypeBadge-env,
+.fileTypeBadge-config { --file-type-color: #047857; background: rgba(209, 250, 229, .54); border-color: rgba(5, 150, 105, .22); }
+.fileTypeBadge-data { --file-type-color: #6d28d9; background: rgba(237, 233, 254, .58); border-color: rgba(124, 58, 237, .22); }
+.fileTypeBadge-cert { --file-type-color: #d48806; background: rgba(255, 247, 230, .6); border-color: rgba(212, 136, 6, .25); }
+.fileTypeBadge-directory { --file-type-color: #b45309; background: rgba(254, 243, 199, .58); border-color: rgba(245, 158, 11, .28); }
+.fileTypeBadge-symlink { --file-type-color: #0f766e; background: rgba(204, 251, 241, .48); border-color: rgba(15, 118, 110, .22); }
+

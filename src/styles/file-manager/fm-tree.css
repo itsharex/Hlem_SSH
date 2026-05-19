@@ -1,0 +1,250 @@
+.pathTree {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+  height: 100%;
+  padding: 8px 6px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+  overscroll-behavior: contain;
+}
+
+.pathTreeRoot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px 6px 22px;
+  border: 1px solid rgba(99, 102, 241, .12);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .9) 0%, rgba(241, 245, 255, .8) 100%);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
+  transition: all .18s ease;
+}
+
+.pathTreeRoot .anticon {
+  color: var(--warning);
+}
+
+.pathTreeRoot:hover,
+.pathTreeRoot-selected {
+  background: linear-gradient(135deg, rgba(99, 102, 241, .1) 0%, rgba(139, 92, 246, .08) 100%);
+  border-color: rgba(99, 102, 241, .3);
+  color: var(--accent);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, .1);
+}
+
+.pathTreeUnavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.pathTreeUnavailable .anticon {
+  color: #cbd5e1;
+}
+
+.pathTreeList {
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.pathTreeList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pathTreeList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pathTreeList::-webkit-scrollbar-thumb {
+  border-radius: 10px;
+  background: #cbd5e1;
+}
+
+.pathTree .ant-tree-list {
+  min-width: 0;
+  overflow: visible !important;
+  height: auto !important;
+}
+
+.pathTree .ant-tree-list-holder {
+  min-width: 0;
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+.pathTree .ant-tree-treenode {
+  display: flex;
+  align-items: center;
+  width: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-height: 30px;
+  margin: 1px 0;
+  padding: 0 6px;
+  border-radius: 7px;
+  transition: background .16s, color .16s;
+}
+
+.pathTree .ant-tree-treenode:hover,
+.pathTree .ant-tree-treenode:has(.ant-tree-node-selected) {
+  background: var(--accent-dim);
+}
+
+.pathTree .ant-tree-treenode:hover .ant-tree-node-content-wrapper,
+.pathTree .ant-tree-treenode:has(.ant-tree-node-selected) .ant-tree-node-content-wrapper {
+  color: var(--accent) !important;
+}
+
+.pathTree .ant-tree-switcher {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px;
+  line-height: 28px !important;
+  color: #64748b;
+  font-size: 10px;
+  opacity: 1 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.pathTreeChevron {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  line-height: 1;
+}
+
+.pathTreeChevron::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  transform-origin: center;
+}
+
+.pathTree .ant-tree-switcher_open .pathTreeChevron::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.pathTree .ant-tree-switcher-noop .pathTreeChevron {
+  display: none;
+}
+
+.pathTree .ant-tree-indent {
+  display: inline-flex !important;
+  align-items: center;
+}
+
+.pathTree .ant-tree-indent-unit {
+  width: 18px !important;
+  min-width: 18px !important;
+}
+
+.pathTree .ant-tree-node-content-wrapper {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  min-height: 28px;
+  padding-inline: 2px 6px !important;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+.pathTree .ant-tree-node-content-wrapper:hover,
+.pathTree .ant-tree-node-selected {
+  background: transparent !important;
+}
+
+.pathTree .ant-tree-iconEle {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning);
+  flex: 0 0 auto;
+}
+
+.pathTree .ant-tree-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pathTree .ant-tree-node-selected {
+  color: var(--accent) !important;
+}
+
+
+/* ─── File column name header with path hint ────────────────────────────── */
+.fileColumnNameHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fileColumnPathHint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #e85d04;
+  opacity: 1;
+}
+
+.fileColumnPathHint::before {
+  content: "·";
+  color: #94a3b8;
+  margin-right: 4px;
+}
+
+.fileTableSurface .ant-table-column-sorters::after {
+  display: none;
+}
+
+.fileTableSurface .ant-table-measure-row {
+  visibility: hidden;
+  height: 0 !important;
+  line-height: 0;
+  font-size: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+}
+
+.fileTableSurface .ant-table-measure-row td {
+  padding: 0 !important;
+  border: none !important;
+  height: 0 !important;
+  line-height: 0 !important;
+}

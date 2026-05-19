@@ -1,0 +1,296 @@
+/* ─── File Manager ──────────────────────────────────────────────────────── */
+
+.deleteConfirmList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: #f9f9fb;
+  border-radius: 6px;
+  border: 1px solid #eee;
+}
+.deleteConfirmList::-webkit-scrollbar {
+  width: 4px;
+}
+.deleteConfirmList::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.deleteConfirmList:hover::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+}
+
+.filePanel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border-top: 1px solid rgba(221, 230, 241, .6);
+  position: relative;
+}
+
+.filePanel::before {
+  content: none;
+  display: none;
+}
+
+.fileWorkspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.fileTopArea {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fileContent {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.fileTableSurface {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-surface);
+}
+
+.fileTableSurface .ant-table-body {
+  overflow-x: hidden !important;
+}
+
+.fileTableSurface-disabled {
+  cursor: not-allowed;
+}
+
+.fileTableSurface-disabled .ant-table,
+.fileTableSurface-disabled .pathTree {
+  opacity: .55;
+  filter: saturate(.7);
+}
+
+.fileContextMenuAnchor {
+  position: fixed;
+  z-index: 1000;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.fileOperationTree {
+  max-height: 240px;
+  margin-bottom: 12px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.fileOperationTree .ant-tree {
+  background: transparent;
+}
+
+.fileOperationHint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fileDropOverlay {
+  position: absolute;
+  inset: 14px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  border: 2.5px dashed rgba(99, 102, 241, .6);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(600px 300px at 50% 50%, rgba(99, 102, 241, .15) 0%, transparent 70%),
+    rgba(244, 248, 255, .94);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  animation: dropOverlayPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dropOverlayPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, .35); }
+  50%      { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
+}
+
+.transferDrawer .ant-drawer-body {
+  overflow: auto;
+  padding: 16px;
+  background:
+    radial-gradient(420px 200px at 0 -10%, rgba(99, 102, 241, .08) 0%, transparent 65%),
+    radial-gradient(360px 200px at 110% 110%, rgba(139, 92, 246, .08) 0%, transparent 65%),
+    linear-gradient(180deg, #f6f9fd 0%, #eef3fb 100%);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, .3) transparent;
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(99, 102, 241, .3) 0%, rgba(139, 92, 246, .3) 100%);
+}
+
+.transferDrawer .ant-drawer-body::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(99, 102, 241, .55) 0%, rgba(139, 92, 246, .55) 100%);
+}
+
+.transferList {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.transferListItem {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.transferListHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  align-items: start;
+}
+
+.transferListTitle {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.transferListTitle strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transferListTitle span,
+.transferListMeta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.transferListPaths {
+  display: grid;
+  gap: 3px;
+}
+
+.transferListPaths span {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transferListMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transferListError {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.saveRecordItem {
+  border-color: #dbeafe;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.saveRecordInlineStatus {
+  font-weight: 800;
+}
+
+.transferInlineStatus {
+  font-weight: 800;
+}
+
+.transferListTitle .transferInlineStatus-success {
+  color: #047857;
+}
+
+.transferListTitle .transferInlineStatus-failed {
+  color: #b91c1c;
+}
+
+.transferListTitle .transferInlineStatus-warning {
+  color: #b45309;
+}
+
+.transferListTitle .saveRecordInlineStatus-success {
+  color: #047857;
+}
+
+.transferListTitle .saveRecordInlineStatus-failed {
+  color: #b91c1c;
+}
+
+.transferListTitle .saveRecordInlineStatus-saving {
+  position: relative;
+  padding-left: 12px;
+  color: #b45309;
+}
+
+.transferListTitle .saveRecordInlineStatus-saving::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #f59e0b;
+  transform: translateY(-50%);
+  animation: saveStatusPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes saveStatusPulse {
+  0%, 100% {
+    opacity: .45;
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, .35);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+  }
+}
+

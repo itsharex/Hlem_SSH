@@ -1,0 +1,198 @@
+/* ─── Modal 通用美化 ────────────────────────────────────────────────────── */
+.settingsModal .ant-modal-content,
+.tunnelModal .ant-modal-content,
+.tunnelConfigModal .ant-modal-content,
+.backupModal .ant-modal-content,
+.fileEditorModal .ant-modal-content,
+.sessionListModal .ant-modal-content {
+  border: 1px solid rgba(232, 238, 246, .9) !important;
+  border-radius: var(--radius-xl) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
+  box-shadow:
+    0 32px 64px -16px rgba(15, 23, 42, .25),
+    0 12px 24px -10px rgba(99, 102, 241, .2),
+    inset 0 1px 0 rgba(255, 255, 255, .9) !important;
+  overflow: hidden;
+  position: relative;
+}
+
+.settingsModal .ant-modal-content::before,
+.tunnelModal .ant-modal-content::before,
+.tunnelConfigModal .ant-modal-content::before,
+.backupModal .ant-modal-content::before,
+.fileEditorModal .ant-modal-content::before,
+.sessionListModal .ant-modal-content::before {
+  content: none;
+  display: none;
+}
+
+.settingsModal .ant-modal-content::after,
+.tunnelModal .ant-modal-content::after,
+.tunnelConfigModal .ant-modal-content::after,
+.backupModal .ant-modal-content::after,
+.fileEditorModal .ant-modal-content::after,
+.sessionListModal .ant-modal-content::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 4px;
+  height: 80px;
+  background: radial-gradient(600px 200px at 50% 0%, rgba(99, 102, 241, .08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.settingsModal .ant-modal-header {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: none;
+  background: transparent !important;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsModal .ant-modal-title {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--text-primary);
+  letter-spacing: -.2px;
+  background: linear-gradient(135deg, #1e293b 0%, #4f46e5 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.settingsModal .ant-modal-body {
+  padding-top: 2px;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsModal .ant-modal-footer {
+  margin-top: 18px;
+  position: relative;
+  z-index: 1;
+}
+
+.settingsPanel {
+  position: relative;
+  padding: 20px 20px 18px;
+  border: 1px solid rgba(226, 232, 240, .7);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
+  transition: all .22s cubic-bezier(.4, 0, .2, 1);
+  overflow: hidden;
+}
+
+.settingsPanel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(360px 120px at 0 0, rgba(99, 102, 241, .05) 0%, transparent 60%),
+    radial-gradient(280px 120px at 100% 100%, rgba(139, 92, 246, .045) 0%, transparent 60%);
+  opacity: .85;
+}
+
+.settingsPanel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.settingsPanel:hover {
+  border-color: rgba(99, 102, 241, .25);
+  box-shadow: 0 8px 20px -8px rgba(99, 102, 241, .12);
+}
+
+.settingsSectionTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.settingsSectionTitle::before {
+  content: none;
+  display: none;
+}
+
+.settingsShortcutGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 14px;
+  gap: 12px;
+}
+
+.settingsShortcutGrid .ant-btn {
+  position: relative;
+  height: 60px !important;
+  justify-content: flex-start;
+  padding: 0 16px !important;
+  border: 1px solid rgba(226, 232, 240, .7) !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  color: var(--text-primary) !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .04) !important;
+  transition: all .22s cubic-bezier(.4, 0, .2, 1) !important;
+  overflow: hidden;
+}
+
+.settingsShortcutGrid .ant-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(99, 102, 241, .05) 0%, rgba(139, 92, 246, .04) 100%);
+  opacity: 0;
+  transition: opacity .22s;
+  pointer-events: none;
+}
+
+.settingsShortcutGrid .ant-btn .ant-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-right: 12px !important;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  color: #6366f1;
+  font-size: 17px;
+  transition: all .25s cubic-bezier(.4, 0, .2, 1);
+  flex: 0 0 38px;
+}
+
+.settingsShortcutGrid .ant-btn:hover,
+.settingsShortcutGrid .ant-btn:focus {
+  border-color: rgba(99, 102, 241, .4) !important;
+  color: #6366f1 !important;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -8px rgba(99, 102, 241, .25) !important;
+  background: linear-gradient(135deg, #fafbff 0%, #f5f3ff 100%) !important;
+}
+
+.settingsShortcutGrid .ant-btn:hover::before {
+  opacity: 1;
+}
+
+.settingsShortcutGrid .ant-btn:hover .ant-btn-icon {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: #ffffff;
+  transform: scale(1.08);
+  box-shadow: 0 4px 12px -2px rgba(99, 102, 241, .4);
+}
+
+.settingsShortcutGrid .ant-btn:active {
+  transform: translateY(0);
+}
+
+.aboutInfoList {
+  display: none;
+}
+
