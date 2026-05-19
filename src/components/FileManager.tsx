@@ -108,8 +108,17 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
 };
 const MIN_COLUMN_WIDTH = 64;
 
-// 模块级缓存：组件卸载/重新挂载、切换会话/标签都保留；仅在程序重启（页面重载）时回到默认值。
-let inMemoryColumnWidths: Record<string, number> = { ...DEFAULT_COLUMN_WIDTHS };
+const COLUMN_WIDTHS_KEY = "helm:fileColumnWidths";
+
+function loadColumnWidths(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(COLUMN_WIDTHS_KEY);
+    if (raw) return { ...DEFAULT_COLUMN_WIDTHS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...DEFAULT_COLUMN_WIDTHS };
+}
+
+let inMemoryColumnWidths: Record<string, number> = loadColumnWidths();
 
 interface ResizableHeaderCellProps extends React.ThHTMLAttributes<HTMLTableCellElement> {
   columnKey?: string;
@@ -178,6 +187,7 @@ export function FileManager({
   useEffect(() => {
     columnWidthsRef.current = columnWidths;
     inMemoryColumnWidths = columnWidths;
+    try { localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(columnWidths)); } catch {}
   }, [columnWidths]);
   const contentRef = useRef<HTMLDivElement>(null);
   const searchSeq = useRef(0);
@@ -246,7 +256,7 @@ export function FileManager({
   );
 
   const tableScrollX = useMemo(
-    () => Object.keys(DEFAULT_COLUMN_WIDTHS).reduce((sum, key) => sum + (columnWidths[key] ?? DEFAULT_COLUMN_WIDTHS[key]), 0),
+    () => 48 + Object.keys(DEFAULT_COLUMN_WIDTHS).reduce((sum, key) => sum + (columnWidths[key] ?? DEFAULT_COLUMN_WIDTHS[key]), 0),
     [columnWidths],
   );
 
@@ -810,10 +820,11 @@ export function FileManager({
               rowSelection={{
                 selectedRowKeys,
                 onChange: (keys) => setSelectedRowKeys(keys as string[]),
-                columnWidth: 32,
+                columnWidth: 48,
               }}
               rowClassName={(entry) => (focusedPath && entry.path === focusedPath ? "fileTableRow-focused" : "")}
               pagination={false}
+              virtual
               onRow={(entry) => ({
                 onDoubleClick: () => openDirectory(entry),
                 onContextMenu: (event) => {
@@ -829,7 +840,7 @@ export function FileManager({
                 },
                 style: { cursor: entry.fileType === "directory" ? "pointer" : "default" },
               })}
-              scroll={{ x: files.length > 0 ? tableScrollX : undefined, y: files.length > 0 ? tableScrollY : undefined }}
+              scroll={{ x: tableScrollX, y: tableScrollY }}
               locale={{ emptyText: canUseFiles ? (searchText ? "无匹配文件" : "目录为空") : "SFTP 可用后显示文件" }}
             />
             <Dropdown

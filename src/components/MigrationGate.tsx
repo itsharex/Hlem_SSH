@@ -26,7 +26,7 @@ export function MigrationGate({ open, loading, error, onMigrate, onSkip }: Migra
       open={open}
       footer={null}
       closable={false}
-      maskClosable={false}
+      mask={{ closable: false }}
       centered
       width={420}
       styles={{

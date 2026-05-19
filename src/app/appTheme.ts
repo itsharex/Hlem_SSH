@@ -79,6 +79,12 @@ export const appTheme: ThemeConfig = {
       footerBg: "#ffffff",
       borderRadiusLG: 12,
     },
+    Tooltip: {
+      colorBgSpotlight: "#f8fafc",
+      colorTextLightSolid: "#0f172a",
+      borderRadius: 8,
+      fontSize: 12,
+    },
     Alert: {
       borderRadiusLG: 8,
     },

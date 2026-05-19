@@ -164,7 +164,7 @@ export function BackupModal({
       title: "",
       width: 92,
       render: (_, record) => (
-        <Space size={4}>
+        <Space size={4} onMouseEnter={(e) => e.stopPropagation()}>
           <Tooltip title="恢复此备份" mouseEnterDelay={0.15}>
             <Button
               aria-label="恢复此备份"
@@ -200,8 +200,9 @@ export function BackupModal({
           return (
             <Tooltip
               mouseEnterDelay={0.4}
-              placement="topLeft"
+              placement="top"
               classNames={{ root: "backupRecordRowTooltip" }}
+              getPopupContainer={(trigger) => trigger.closest(".ant-modal-body") || document.body}
               title={
                 <div className="backupRecordRowTooltipContent">
                   <div><span>时间</span>{new Date(record.createdAt).toLocaleString()}</div>
@@ -360,15 +361,15 @@ export function BackupModal({
 
           <section className="backupPanel">
             <div className="backupSectionHeader">
-              <span>已备份</span>
-              <Tag>{records.length}</Tag>
+              <span>{backupTarget === "local" ? "本地备份" : "云端备份"}</span>
+              <Tag>{records.filter((r) => backupTarget === "local" ? r.targetKind === "local" : r.targetKind !== "local").length}</Tag>
             </div>
             <Table
               className="backupRecordTable"
               rowKey="id"
               size="small"
               columns={columns}
-              dataSource={records}
+              dataSource={records.filter((r) => backupTarget === "local" ? r.targetKind === "local" : r.targetKind !== "local")}
               components={tableComponents}
               pagination={{ pageSize: 5, hideOnSinglePage: true }}
               scroll={{ x: 720, y: 180 }}

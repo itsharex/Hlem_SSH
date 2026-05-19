@@ -73,7 +73,7 @@ export function TransferCenter({
       open={open}
       title={`任务记录${total ? ` · ${total} 条` : ""}`}
       placement="right"
-      width={430}
+      size={430}
       closable={false}
       className="transferDrawer"
       extra={

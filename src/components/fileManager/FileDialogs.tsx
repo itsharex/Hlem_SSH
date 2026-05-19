@@ -82,7 +82,7 @@ export function FileDialogs({
             <Tree
               showIcon
               blockNode
-              virtual={false}
+              virtual
               expandAction={false}
               selectedKeys={[dialog.value]}
               expandedKeys={directoryExpandedKeys}

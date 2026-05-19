@@ -194,7 +194,7 @@ function MetricBar({
         <span>{label}</span>
         <span>{text ?? `${value}%`}</span>
       </div>
-      <Progress percent={value} showInfo={false} strokeColor={statusColor} trailColor="#e4e9ef" size="small" />
+      <Progress percent={value} showInfo={false} strokeColor={statusColor} railColor="#e4e9ef" size="small" />
     </div>
   );
 }

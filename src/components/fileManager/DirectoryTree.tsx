@@ -29,7 +29,7 @@ export function DirectoryTree({
 }: DirectoryTreeProps) {
   const treeData = useMemo(
     () => buildTreeData(directoryEntries, path, new Set(directoryLoadingKeys)),
-    [directoryEntries, path, directoryLoadingKeys],
+    [directoryEntries, path],
   );
 
   if (!canUseFiles) {
@@ -61,16 +61,12 @@ export function DirectoryTree({
         className="pathTreeList"
         showIcon
         blockNode
-        virtual={false}
+        virtual
         expandAction={false}
         selectedKeys={path === "/" ? [] : [path]}
         expandedKeys={directoryExpandedKeys}
         treeData={treeData}
         switcherIcon={({ isLeaf }) => (isLeaf ? null : <span className="pathTreeChevron" />)}
-        loadData={(node) => {
-          onLoadDirectory(String(node.key));
-          return Promise.resolve();
-        }}
         onExpand={(keys, info) => {
           onExpandChange(keys.map(String));
           if (info.expanded) onLoadDirectory(String(info.node.key));
