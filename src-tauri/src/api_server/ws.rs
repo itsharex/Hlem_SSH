@@ -21,8 +21,9 @@ use tokio::{
 
 use crate::remote::ExecStreamChunk;
 
+use super::auth::issue_ticket;
 use super::guard::check_dangerous_command;
-use super::{friendly_error_detail, push_log, push_log_with_response, ApiServerState};
+use super::{friendly_error_detail, push_log, push_log_with_response, ApiServerState, TicketPurpose, TICKET_TTL};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct WsTokenQuery {
@@ -136,6 +137,42 @@ async fn handle_request(
                 handle.abort();
                 let _ = tx.send(ws_text(&WsResponse { id, r#type: "cancelled".into(), payload: serde_json::json!({}) })).await;
             }
+            return;
+        }
+        "issue-ticket" => {
+            // 由 WS 签发短期一次性票据，HTTP upload/download 凭票放行。
+            // 已经通过 WS 握手鉴权 → 此处不再校验 api_key。
+            let purpose_str = value.get("purpose").and_then(|v| v.as_str()).unwrap_or("");
+            let purpose = match TicketPurpose::parse(purpose_str) {
+                Some(p) => p,
+                None => {
+                    let _ = tx.send(ws_text(&WsResponse::error(&id, "purpose 必须为 upload 或 download"))).await;
+                    return;
+                }
+            };
+            // sessionId 优先取请求中的；若 server 配了 allowed_session_id，
+            // 自动绑定到允许的会话（防止越权）。
+            let req_session = value.get("sessionId").and_then(|v| v.as_str()).map(String::from);
+            let bound_session = match (&state.allowed_session_id, &req_session) {
+                (Some(allowed), Some(req)) if allowed != req => {
+                    let _ = tx.send(ws_text(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
+                    return;
+                }
+                (Some(allowed), _) => Some(allowed.clone()),
+                (None, req) => req.clone(),
+            };
+            let bound_session_log = bound_session.clone().unwrap_or_else(|| "<any>".into());
+            let ticket = issue_ticket(&state, bound_session, purpose).await;
+            let _ = tx.send(ws_text(&WsResponse {
+                id,
+                r#type: "ticket".into(),
+                payload: serde_json::json!({
+                    "ticket": ticket,
+                    "purpose": purpose.as_str(),
+                    "expiresIn": TICKET_TTL.as_secs(),
+                }),
+            })).await;
+            push_log(&state, "ws/issue-ticket", &format!("{} → {}", purpose.as_str(), bound_session_log), true, 0).await;
             return;
         }
         _ => {}

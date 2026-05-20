@@ -4,6 +4,9 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  optimizeDeps: {
+    exclude: ["@tauri-apps/api"],
+  },
   build: {
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
@@ -26,6 +29,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5177,
     strictPort: true,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+    },
     watch: {
       ignored: ["**/src-tauri/**"],
     },

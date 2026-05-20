@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
-use super::auth::{verify_auth, verify_session_access};
-use super::{friendly_error_detail, map_remote_error, push_log, ApiError, ApiServerState};
+use super::auth::{consume_ticket, verify_auth, verify_session_access};
+use super::{friendly_error_detail, map_remote_error, push_log, ApiError, ApiServerState, TicketPurpose};
 
 // ─── Public types (re-exported from mod.rs) ────────────────────────────────────
 
@@ -46,14 +46,26 @@ pub(super) struct UploadResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct UploadQuery {
+    /// WS 签发的一次性票据。放在 query 中是为了能在解析 multipart 之前先校验，
+    /// 避免持票无效时仍然把整个大文件读入临时文件造成的 DoS。
+    #[serde(default)]
+    ticket: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct DownloadQuery {
     session_id: String,
     path: String,
+    #[serde(default)]
+    ticket: String,
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────────
 
-/// HTTP 鉴权验证端点。
+/// HTTP 鉴权验证端点。仅用于 api_key 探活——客户端可在打开 WS 之前测试 key 是否有效。
+/// 真正的业务鉴权全部走 WS（长连接）+ ticket（HTTP upload/download）。
 pub async fn auth_check(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
@@ -61,17 +73,22 @@ pub async fn auth_check(
     let key = state.api_key.read().await;
     verify_auth(&headers, &key)?;
     drop(key);
-    Ok(Json(serde_json::json!({ "authenticated": true, "ws": "/api/ws" })))
+    Ok(Json(serde_json::json!({
+        "authenticated": true,
+        "ws": "/api/ws",
+        "uploadFlow": "ws issue-ticket(purpose=upload) → POST /api/upload?ticket=...",
+        "downloadFlow": "ws issue-ticket(purpose=download) → GET /api/download?ticket=...&sessionId=...&path=...",
+    })))
 }
 
 pub async fn upload_file(
-    headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
+    Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    // 票据必须先解析 sessionId 才能与 ticket 绑定校验，但 ticket 本身的"存在 + 未过期 + 用途"
+    // 这部分可以提前校验，且即便如此也仍然有 DoS 防护：multipart 还没读，正常流程下这里就已拦截。
+    // 由于 consume_ticket 是一次性的，我们把票据完整校验放到 sessionId 解析之后做。
 
     let mut session_id: Option<String> = None;
     let mut remote_path: Option<String> = None;
@@ -82,6 +99,11 @@ pub async fn upload_file(
         if let Some(p) = path.as_ref() { let _ = tokio::fs::remove_file(p).await; }
     }
 
+    // 第一遍只接收非文件字段，用于先做完整票据校验。
+    // 但 multipart 是单向流，所以我们采用：sessionId/remotePath 必须排在 file 字段之前。
+    // 解析时在拿到 file 之前如果已经有 sessionId，先 consume_ticket，再继续读取 file。
+    let mut ticket_consumed = false;
+
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         (StatusCode::BAD_REQUEST, Json(ApiError { error: format!("解析 multipart 失败: {}", e) }))
     })? {
@@ -90,6 +112,20 @@ pub async fn upload_file(
             "sessionId" => { session_id = field.text().await.ok(); }
             "remotePath" => { remote_path = field.text().await.ok(); }
             "file" => {
+                // 在开始消耗大文件前必须确保票据有效。
+                if !ticket_consumed {
+                    let sid = match session_id.as_deref() {
+                        Some(s) if !s.is_empty() => s,
+                        _ => {
+                            return Err((StatusCode::BAD_REQUEST, Json(ApiError {
+                                error: "multipart 字段顺序错误：file 之前必须先发送 sessionId".into(),
+                            })));
+                        }
+                    };
+                    consume_ticket(&state, &query.ticket, TicketPurpose::Upload, sid).await?;
+                    ticket_consumed = true;
+                }
+
                 let temp = std::env::temp_dir().join(format!("helm_upload_{}", uuid::Uuid::new_v4()));
                 let mut file = match tokio::fs::File::create(&temp).await {
                     Ok(f) => f,
@@ -113,6 +149,13 @@ pub async fn upload_file(
             }
             _ => {}
         }
+    }
+
+    // 走到这里若仍未消费 ticket，说明根本没有 file 字段。返回错误前不消费票据，
+    // 让客户端可以修正请求后用同一张 ticket 重试（毕竟它从未被验证过）。
+    if !ticket_consumed {
+        cleanup_temp(&temp_file_path).await;
+        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 file 字段".into() })));
     }
 
     let session_id = match session_id {
@@ -171,14 +214,10 @@ pub async fn upload_file(
 }
 
 pub async fn download_file(
-    headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<DownloadQuery>,
 ) -> Result<Response<Body>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
-
+    consume_ticket(&state, &query.ticket, TicketPurpose::Download, &query.session_id).await?;
     verify_session_access(&state, &query.session_id)?;
     let start = std::time::Instant::now();
 

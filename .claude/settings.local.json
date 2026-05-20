@@ -34,7 +34,15 @@
       "Bash(awk '/EmptyWorkspace/{print NR\": \"$0}' \"/c/Users/Administrator/Desktop/py/Helm/src/App.tsx\")",
       "Bash(echo \"EXIT=$?\")",
       "Bash(python3 *)",
-      "Bash(gh run *)"
+      "Bash(gh run *)",
+      "Bash(tasklist)",
+      "Bash(netstat -ano)",
+      "Bash(curl *)",
+      "mcp__chrome__chrome_navigate",
+      "Bash(wmic process *)",
+      "Bash(grep -v \"^$\")",
+      "Bash(tasklist /v /fi \"imagename eq helm.exe\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d['app']['windows'], indent=2\\)\\)\")"
     ]
   }
 }

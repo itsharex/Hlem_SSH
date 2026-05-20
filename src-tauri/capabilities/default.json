@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop permissions",
-  "windows": ["main", "editor-*"],
-  "permissions": ["core:default", "core:webview:allow-create-webview-window", "dialog:default", "log:default"]
+  "windows": ["main", "editor-*", "api-logs"],
+  "permissions": ["core:default", "core:webview:allow-create-webview-window", "core:window:allow-set-focus", "dialog:default", "log:default"]
 }

@@ -3,8 +3,10 @@ mod guard;
 mod handlers_remote;
 mod ws;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -35,8 +37,46 @@ pub use handlers_remote::{FileEntry, SessionItem};
 const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
 const MAX_LOG_ENTRIES: usize = 100;
 const LOG_FLUSH_DEBOUNCE: Duration = Duration::from_secs(1);
+/// Ticket 有效期（秒）。客户端从 WS 拿到 ticket 后须在该窗口内发起 HTTP 请求。
+pub(self) const TICKET_TTL: Duration = Duration::from_secs(60);
+/// Ticket 清理任务运行间隔。
+const TICKET_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 // ─── Public types ──────────────────────────────────────────────────────────────
+
+/// 短期一次性票据，由 WS 鉴权后签发，HTTP upload/download 凭票放行。
+#[derive(Clone)]
+pub(self) struct TicketEntry {
+    /// 绑定的会话 ID（可选）。若 server 启用了 allowed_session_id，
+    /// 签发时会自动绑定到该会话；HTTP 端校验时必须与请求中的 sessionId 一致。
+    pub session_id: Option<String>,
+    /// 签发用途，用于区分 upload / download，避免 ticket 跨用途滥用。
+    pub purpose: TicketPurpose,
+    pub expires_at: Instant,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(self) enum TicketPurpose {
+    Upload,
+    Download,
+}
+
+impl TicketPurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Upload => "upload",
+            Self::Download => "download",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "upload" => Some(Self::Upload),
+            "download" => Some(Self::Download),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ApiServerState {
@@ -50,6 +90,7 @@ pub struct ApiServerState {
     #[allow(dead_code)]
     pub log_file: PathBuf,
     pub log_dirty: Arc<Notify>,
+    pub(self) tickets: Arc<RwLock<HashMap<String, TicketEntry>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +200,7 @@ pub async fn start_server(
     let existing_logs = load_logs_from_file(&log_file);
     let logs = Arc::new(RwLock::new(existing_logs));
     let log_dirty = Arc::new(Notify::new());
+    let tickets = Arc::new(RwLock::new(HashMap::<String, TicketEntry>::new()));
     let state = ApiServerState {
         api_key: Arc::new(RwLock::new(api_key.clone())),
         app: app.clone(),
@@ -169,6 +211,7 @@ pub async fn start_server(
         logs: logs.clone(),
         log_file: log_file.clone(),
         log_dirty: log_dirty.clone(),
+        tickets: tickets.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -199,6 +242,28 @@ pub async fn start_server(
     let actual_port = listener.local_addr().map_err(|e| format!("获取端口失败: {}", e))?.port();
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+    // Background ticket cleaner: 周期性扫描过期 ticket 并移除，避免内存泄漏。
+    {
+        let tickets_for_cleaner = tickets.clone();
+        let mut cleaner_shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(TICKET_CLEANUP_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let now = Instant::now();
+                        let mut map = tickets_for_cleaner.write().await;
+                        map.retain(|_, entry| entry.expires_at > now);
+                    }
+                    _ = cleaner_shutdown.changed() => {
+                        if *cleaner_shutdown.borrow_and_update() { break; }
+                    }
+                }
+            }
+        });
+    }
 
     // Background log flusher
     {

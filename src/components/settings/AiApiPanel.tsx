@@ -215,12 +215,12 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
               </Tooltip>
             </div>
             <div className="aiApiEndpointScroll">
-              <div className="aiApiEndpointItem"><code>GET /api/auth</code> — 验证 API Key</div>
-              <div className="aiApiEndpointItem"><code>POST /api/upload</code> — 上传文件</div>
-              <div className="aiApiEndpointItem"><code>GET /api/download</code> — 下载文件</div>
-              <div className="aiApiEndpointItem"><code>WS /api/ws</code> — 主通道（一次鉴权，后续全部操作）</div>
+              <div className="aiApiEndpointItem"><code>WS /api/ws</code> — 主通道（主鉴权）</div>
+              <div className="aiApiEndpointItem"><code>GET /api/auth</code> — 验证 API Key（探活，可选）</div>
+              <div className="aiApiEndpointItem"><code>POST /api/upload?ticket=...</code> — 上传文件（凭 WS 签发的票）</div>
+              <div className="aiApiEndpointItem"><code>GET /api/download?ticket=...</code> — 下载文件（凭 WS 签发的票）</div>
             </div>
-            <p className="aiApiEndpointNote">HTTP 仅用于鉴权和文件传输，其余操作全部通过 WS 完成。</p>
+            <p className="aiApiEndpointNote">WS 一次握手即完成鉴权，承载全部操作；上传/下载需额外凭 WS 签发的一次性票据访问 HTTP。</p>
           </div>
         )}
         <div className="aiApiActions">
