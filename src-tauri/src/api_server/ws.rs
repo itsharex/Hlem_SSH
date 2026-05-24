@@ -3,20 +3,22 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State as AxumState,
-    },
+    extract::{Query, State as AxumState},
     http::{HeaderMap, Response, StatusCode},
     response::IntoResponse,
 };
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
+};
+use yawc::{
+    frame::{Frame, OpCode},
+    CompressionLevel, IncomingUpgrade, Options,
 };
 
 use crate::remote::ExecStreamChunk;
@@ -32,7 +34,7 @@ pub(super) struct WsTokenQuery {
 }
 
 pub(super) async fn ws_handler(
-    ws: WebSocketUpgrade,
+    ws: IncomingUpgrade,
     headers: HeaderMap,
     Query(token_query): Query<WsTokenQuery>,
     AxumState(state): AxumState<ApiServerState>,
@@ -50,27 +52,49 @@ pub(super) async fn ws_handler(
             .body(Body::from("invalid api key"))
             .unwrap_or_else(|_| StatusCode::UNAUTHORIZED.into_response());
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+
+    // 服务端默认开启 permessage-deflate 压缩。
+    // 客户端在握手时通过 `Sec-WebSocket-Extensions: permessage-deflate` 协商；
+    // 不支持的客户端会自动 fallback 到无压缩，互不影响。
+    let options = Options::default().with_compression_level(CompressionLevel::best());
+    let (response, fut) = match ws.upgrade(options) {
+        Ok(v) => v,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(format!("WebSocket 升级失败: {}", e)))
+                .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response());
+        }
+    };
+
+    tokio::spawn(async move {
+        match fut.await {
+            Ok(ws) => handle_socket(ws, state).await,
+            Err(_) => {}
+        }
+    });
+
+    response.into_response()
 }
 
-async fn handle_socket(socket: WebSocket, state: ApiServerState) {
+async fn handle_socket(ws: yawc::HttpWebSocket, state: ApiServerState) {
     push_log(&state, "ws", "WebSocket 连接已建立", true, 0).await;
 
-    let (tx, mut rx) = mpsc::channel::<Message>(256);
-    let (mut sender, mut receiver) = socket.split();
+    let (tx, mut rx) = mpsc::channel::<Frame>(256);
+    let (mut sink, mut stream) = ws.split();
 
     let writer = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if sender.send(msg).await.is_err() {
+        while let Some(frame) = rx.recv().await {
+            if sink.send(frame).await.is_err() {
                 break;
             }
         }
-        let _ = sender.close().await;
+        // yawc 的 sink 自带 close 语义；显式 close 通过 send 一个 close frame 实现。
+        let _ = sink.send(Frame::close(yawc::close::CloseCode::Normal, b"")).await;
     });
 
-    // 服务端心跳：每 30s 发一个 Ping 帧。如果客户端断网不回 Pong，
-    // axum/tungstenite 底层会在下一次 send 时检测到连接已死并返回 Err，
-    // writer 任务退出 → tx 被 drop → 整个 socket 清理。
+    // 服务端心跳：每 30s 发一个 Ping 帧。客户端断网时下一次 send 失败 → writer 退出 → 整体清理。
+    // yawc 自动处理 incoming Ping/Pong，所以这里只需主动发心跳。
     let heartbeat_tx = tx.clone();
     let heartbeat = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
@@ -78,7 +102,7 @@ async fn handle_socket(socket: WebSocket, state: ApiServerState) {
         ticker.tick().await; // skip first immediate tick
         loop {
             ticker.tick().await;
-            if heartbeat_tx.send(Message::Ping(vec![].into())).await.is_err() {
+            if heartbeat_tx.send(Frame::ping(Bytes::new())).await.is_err() {
                 break;
             }
         }
@@ -86,24 +110,33 @@ async fn handle_socket(socket: WebSocket, state: ApiServerState) {
 
     let jobs: Arc<RwLock<HashMap<String, JoinHandle<()>>>> = Arc::new(RwLock::new(HashMap::new()));
 
-    while let Some(Ok(msg)) = receiver.next().await {
-        match msg {
-            Message::Text(text) => {
-                let value: JsonValue = match serde_json::from_str(&text) {
+    while let Some(frame) = stream.next().await {
+        match frame.opcode() {
+            OpCode::Text => {
+                let payload = frame.into_payload();
+                let text = match std::str::from_utf8(&payload) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let _ = tx.send(ws_text_frame(&WsResponse::error("", "Text 帧不是合法 UTF-8"))).await;
+                        continue;
+                    }
+                };
+                let value: JsonValue = match serde_json::from_str(text) {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = tx.send(ws_text(&WsResponse::error("", &format!("非法 JSON: {}", e)))).await;
+                        let _ = tx.send(ws_text_frame(&WsResponse::error("", &format!("非法 JSON: {}", e)))).await;
                         continue;
                     }
                 };
                 handle_request(value, tx.clone(), state.clone(), jobs.clone()).await;
             }
-            Message::Binary(_) => {
-                let _ = tx.send(ws_text(&WsResponse::error("", "暂不支持二进制请求帧，请用 JSON 文本"))).await;
+            OpCode::Binary => {
+                let _ = tx.send(ws_text_frame(&WsResponse::error("", "暂不支持二进制请求帧，请用 JSON 文本"))).await;
             }
-            Message::Ping(p) => { let _ = tx.send(Message::Pong(p)).await; }
-            Message::Pong(_) => {}
-            Message::Close(_) => break,
+            // yawc 自动回 Pong；Ping/Pong 仍会传到这里供观测，无需处理。
+            OpCode::Ping | OpCode::Pong => {}
+            OpCode::Close => break,
+            _ => {}
         }
     }
 
@@ -120,7 +153,7 @@ async fn handle_socket(socket: WebSocket, state: ApiServerState) {
 
 async fn handle_request(
     value: JsonValue,
-    tx: mpsc::Sender<Message>,
+    tx: mpsc::Sender<Frame>,
     state: ApiServerState,
     jobs: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
 ) {
@@ -129,13 +162,13 @@ async fn handle_request(
 
     match req_type.as_str() {
         "ping" => {
-            let _ = tx.send(ws_text(&WsResponse { id, r#type: "pong".into(), payload: serde_json::json!({}) })).await;
+            let _ = tx.send(ws_text_frame(&WsResponse { id, r#type: "pong".into(), payload: serde_json::json!({}) })).await;
             return;
         }
         "cancel" => {
             if let Some(handle) = jobs.write().await.remove(&id) {
                 handle.abort();
-                let _ = tx.send(ws_text(&WsResponse { id, r#type: "cancelled".into(), payload: serde_json::json!({}) })).await;
+                let _ = tx.send(ws_text_frame(&WsResponse { id, r#type: "cancelled".into(), payload: serde_json::json!({}) })).await;
             }
             return;
         }
@@ -146,7 +179,7 @@ async fn handle_request(
             let purpose = match TicketPurpose::parse(purpose_str) {
                 Some(p) => p,
                 None => {
-                    let _ = tx.send(ws_text(&WsResponse::error(&id, "purpose 必须为 upload 或 download"))).await;
+                    let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "purpose 必须为 upload 或 download"))).await;
                     return;
                 }
             };
@@ -155,7 +188,7 @@ async fn handle_request(
             let req_session = value.get("sessionId").and_then(|v| v.as_str()).map(String::from);
             let bound_session = match (&state.allowed_session_id, &req_session) {
                 (Some(allowed), Some(req)) if allowed != req => {
-                    let _ = tx.send(ws_text(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
+                    let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
                     return;
                 }
                 (Some(allowed), _) => Some(allowed.clone()),
@@ -163,7 +196,7 @@ async fn handle_request(
             };
             let bound_session_log = bound_session.clone().unwrap_or_else(|| "<any>".into());
             let ticket = issue_ticket(&state, bound_session, purpose).await;
-            let _ = tx.send(ws_text(&WsResponse {
+            let _ = tx.send(ws_text_frame(&WsResponse {
                 id,
                 r#type: "ticket".into(),
                 payload: serde_json::json!({
@@ -200,7 +233,7 @@ async fn handle_request(
             | "run-backup" | "delete-backup-record" => {
                 handle_ws_backup(req_type_for_job, value_for_job, job_id.clone(), tx_for_job, state_for_job).await
             }
-            other => { let _ = tx_for_job.send(ws_text(&WsResponse::error(&job_id, &format!("未知请求类型: {}", other)))).await; }
+            other => { let _ = tx_for_job.send(ws_text_frame(&WsResponse::error(&job_id, &format!("未知请求类型: {}", other)))).await; }
         }
         jobs_for_cleanup.write().await.remove(&job_id);
     });
@@ -210,22 +243,22 @@ async fn handle_request(
     }
 }
 
-async fn handle_ws_list_sessions(id: String, tx: mpsc::Sender<Message>, state: ApiServerState) {
+async fn handle_ws_list_sessions(id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
     let sessions = state.remote.list_connected_sessions().await;
     let count = sessions.len();
-    let _ = tx.send(ws_text(&WsResponse::result(&id, sessions))).await;
+    let _ = tx.send(ws_text_frame(&WsResponse::result(&id, sessions))).await;
     push_log(&state, "ws/sessions", &format!("{} 项", count), true, 0).await;
 }
 
-async fn handle_ws_list_files(value: JsonValue, id: String, tx: mpsc::Sender<Message>, state: ApiServerState) {
+async fn handle_ws_list_files(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
     let session_id = value.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string();
     if session_id.is_empty() {
-        let _ = tx.send(ws_text(&WsResponse::error(&id, "缺少 sessionId"))).await;
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "缺少 sessionId"))).await;
         return;
     }
     if state.allowed_session_id.as_deref().map(|s| s != session_id.as_str()).unwrap_or(false) {
-        let _ = tx.send(ws_text(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
         return;
     }
     let start = std::time::Instant::now();
@@ -233,61 +266,93 @@ async fn handle_ws_list_files(value: JsonValue, id: String, tx: mpsc::Sender<Mes
         Ok(entries) => {
             let elapsed = start.elapsed().as_millis() as u64;
             push_log(&state, "ws/files", &format!("{} ({} 项)", path, entries.len()), true, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::result(&id, entries))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, entries))).await;
         }
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as u64;
             push_log(&state, "ws/files", &friendly_error_detail(&format!("{} → {}", path, e), &state), false, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::error(&id, &e))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
         }
     }
 }
 
-async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Message>, state: ApiServerState) {
+async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
     let session_id = value.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let command = value.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let timeout_ms = value.get("timeoutMs").and_then(|v| v.as_u64()).unwrap_or(30_000);
     let binary = value.get("binary").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if session_id.is_empty() || command.is_empty() {
-        let _ = tx.send(ws_text(&WsResponse::error(&id, "缺少 sessionId 或 command"))).await;
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "缺少 sessionId 或 command"))).await;
         return;
     }
     if let Some(reason) = check_dangerous_command(&command) {
-        let _ = tx.send(ws_text(&WsResponse::error(&id, &format!("命令被拒绝: {}", reason)))).await;
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &format!("命令被拒绝: {}", reason)))).await;
         return;
     }
     if state.allowed_session_id.as_deref().map(|s| s != session_id.as_str()).unwrap_or(false) {
-        let _ = tx.send(ws_text(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
         return;
     }
 
     let (chunk_tx, mut chunk_rx) = mpsc::channel::<ExecStreamChunk>(256);
     let id_for_pump = id.clone();
     let tx_for_pump = tx.clone();
-    // 收集 stdout/stderr 用于日志 response 字段（最多 2000 字符）
+    // 收集 stdout/stderr 用于日志 response 字段（最多 2000 字符）。
+    // binary=true 时仍按 base64 压成短预览（避免日志里塞二进制）。
     let collected = Arc::new(RwLock::new(String::new()));
     let collected_for_pump = collected.clone();
     let pump = tokio::spawn(async move {
         while let Some(chunk) = chunk_rx.recv().await {
-            let (frame_type, data_str) = match chunk {
-                ExecStreamChunk::Stdout(bytes) => ("stdout", encode_chunk(&bytes, binary)),
-                ExecStreamChunk::Stderr(bytes) => ("stderr", encode_chunk(&bytes, binary)),
+            let (frame_type_byte, frame_type_str, bytes) = match chunk {
+                ExecStreamChunk::Stdout(b) => (0u8, "stdout", b),
+                ExecStreamChunk::Stderr(b) => (1u8, "stderr", b),
             };
-            // 累积到日志 buffer（限制 2000 字符）
+
+            // 累积日志预览（限制 2000 字符）
             {
+                let preview = if binary {
+                    BASE64.encode(&bytes)
+                } else {
+                    String::from_utf8_lossy(&bytes).into_owned()
+                };
                 let mut buf = collected_for_pump.write().await;
                 if buf.len() < 2000 {
                     let remaining = 2000 - buf.len();
-                    if data_str.len() <= remaining {
-                        buf.push_str(&data_str);
+                    if preview.len() <= remaining {
+                        buf.push_str(&preview);
                     } else {
-                        buf.push_str(&data_str[..remaining]);
+                        buf.push_str(&preview[..remaining]);
                     }
                 }
             }
-            let frame = WsResponse { id: id_for_pump.clone(), r#type: frame_type.into(), payload: serde_json::json!({ "data": data_str, "binary": binary }) };
-            if tx_for_pump.send(ws_text(&frame)).await.is_err() { break; }
+
+            let send_result = if binary {
+                // 二进制帧格式：[1 byte type=0/1][1 byte id_len][id ascii][payload]
+                // 客户端看到 WebSocket Binary frame → 切帧头取 id/type → 直接拿 payload 二进制原文。
+                // 比 base64-in-JSON-Text 省 33% 体积 + 双方 base64 编解码 CPU。
+                let id_bytes = id_for_pump.as_bytes();
+                if id_bytes.len() > 255 {
+                    // id 不会这么长，但 defensive cap
+                    let _ = tx_for_pump.send(ws_text_frame(&WsResponse::error(&id_for_pump, "id 过长，无法用 binary frame 编码"))).await;
+                    continue;
+                }
+                let mut frame = Vec::with_capacity(2 + id_bytes.len() + bytes.len());
+                frame.push(frame_type_byte);
+                frame.push(id_bytes.len() as u8);
+                frame.extend_from_slice(id_bytes);
+                frame.extend_from_slice(&bytes);
+                tx_for_pump.send(Frame::binary(Bytes::from(frame))).await
+            } else {
+                let data_str = String::from_utf8_lossy(&bytes).into_owned();
+                let frame = WsResponse {
+                    id: id_for_pump.clone(),
+                    r#type: frame_type_str.into(),
+                    payload: serde_json::json!({ "data": data_str, "binary": false }),
+                };
+                tx_for_pump.send(ws_text_frame(&frame)).await
+            };
+            if send_result.is_err() { break; }
         }
     });
 
@@ -305,16 +370,16 @@ async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Message>,
     match result {
         Ok(summary) => {
             push_log_with_response(&state, "ws/exec", &detail, !summary.timed_out && summary.exit_status.unwrap_or(1) == 0, elapsed, response_text).await;
-            let _ = tx.send(ws_text(&WsResponse { id, r#type: "done".into(), payload: serde_json::json!({ "exitCode": summary.exit_status.unwrap_or(1), "timedOut": summary.timed_out, "durationMs": summary.duration_ms }) })).await;
+            let _ = tx.send(ws_text_frame(&WsResponse { id, r#type: "done".into(), payload: serde_json::json!({ "exitCode": summary.exit_status.unwrap_or(1), "timedOut": summary.timed_out, "durationMs": summary.duration_ms, "binary": binary }) })).await;
         }
         Err(e) => {
             push_log(&state, "ws/exec", &friendly_error_detail(&format!("{} → {}", command, e), &state), false, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::error(&id, &e))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
         }
     }
 }
 
-async fn handle_ws_tunnel(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Message>, state: ApiServerState) {
+async fn handle_ws_tunnel(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
     let start = std::time::Instant::now();
     let result: Result<JsonValue, String> = async {
         match action.as_str() {
@@ -364,16 +429,16 @@ async fn handle_ws_tunnel(action: String, value: JsonValue, id: String, tx: mpsc
     match result {
         Ok(data) => {
             push_log(&state, &format!("ws/{}", action), "OK", true, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::result(&id, data))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, data))).await;
         }
         Err(e) => {
             push_log(&state, &format!("ws/{}", action), &e, false, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::error(&id, &e))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
         }
     }
 }
 
-async fn handle_ws_backup(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Message>, state: ApiServerState) {
+async fn handle_ws_backup(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
     let start = std::time::Instant::now();
     let result: Result<JsonValue, String> = async {
         match action.as_str() {
@@ -438,21 +503,17 @@ async fn handle_ws_backup(action: String, value: JsonValue, id: String, tx: mpsc
     match result {
         Ok(data) => {
             push_log(&state, &format!("ws/{}", action), "OK", true, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::result(&id, data))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, data))).await;
         }
         Err(e) => {
             push_log(&state, &format!("ws/{}", action), &e, false, elapsed).await;
-            let _ = tx.send(ws_text(&WsResponse::error(&id, &e))).await;
+            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
         }
     }
 }
 
-fn encode_chunk(bytes: &[u8], binary: bool) -> String {
-    if binary { BASE64.encode(bytes) } else { String::from_utf8_lossy(bytes).into_owned() }
-}
-
-fn ws_text<T: Serialize>(value: &T) -> Message {
-    Message::Text(serde_json::to_string(value).unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"内部序列化失败\"}".into()).into())
+fn ws_text_frame<T: Serialize>(value: &T) -> Frame {
+    Frame::text(Bytes::from(serde_json::to_string(value).unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"内部序列化失败\"}".into())))
 }
 
 #[derive(Serialize)]

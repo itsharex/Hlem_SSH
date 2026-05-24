@@ -115,6 +115,7 @@ impl RemoteRuntime {
     }
 
     /// Wait for a transfer to complete, polling every 200ms. Returns final TransferInfo.
+    #[allow(dead_code)]
     pub async fn wait_transfer(&self, transfer_id: &str) -> AppResult<TransferInfo> {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;

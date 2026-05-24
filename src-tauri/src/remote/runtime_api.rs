@@ -1,6 +1,50 @@
 use super::*;
 use crate::api_server::{FileEntry, SessionItem};
+use bytes::Bytes;
+use futures_util::Stream;
+use std::collections::VecDeque;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::AsyncRead;
+use tokio::sync::mpsc;
+
+/// 多 mpsc 顺序拼接流：N 个 worker 各自往一个 mpsc 推 Bytes，
+/// 主流按 worker 0 → 1 → ... → N-1 的顺序消费，得到一个连续的字节流，
+/// 喂给 axum `Body::from_stream` 即可走出 HTTP 响应。
+///
+/// 这是 AI API 下载的并行多 File handle 方案的最后一块拼图：
+///   - 各 worker 拿独立 SFTP File handle，各自 in-flight READ → N 倍读吞吐
+///   - 通过有界 channel 提供反压，每个 worker 最多预读 PER_WORKER_QUEUE_DEPTH * buffer 字节
+///   - 客户端断开 → receiver drop → worker `tx.send` 返回 Err → worker 自然退出
+pub struct OrderedChunkStream {
+    receivers: VecDeque<mpsc::Receiver<io::Result<Bytes>>>,
+}
+
+impl Stream for OrderedChunkStream {
+    type Item = io::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            match self.receivers.front_mut() {
+                None => return Poll::Ready(None),
+                Some(rx) => match rx.poll_recv(cx) {
+                    Poll::Ready(Some(item)) => return Poll::Ready(Some(item)),
+                    Poll::Ready(None) => {
+                        // 当前 worker 通道关闭（正常完成或出错），切到下一个
+                        self.receivers.pop_front();
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+            }
+        }
+    }
+}
+
+/// 每个 worker 的 mpsc 通道深度（以 chunk 计，每 chunk 至多 buffer_size 字节）。
+/// 4 worker × 4 槽 × 1MB = 最多 16MB 飞行内存，给客户端慢消费的反压预留空间。
+const PER_WORKER_QUEUE_DEPTH: usize = 4;
 
 impl RemoteRuntime {
     /// List all currently connected sessions with their SFTP availability.
@@ -136,6 +180,7 @@ impl RemoteRuntime {
     }
 
     /// Find the sftp_id for a given session. Returns the sftp_id string.
+    #[allow(dead_code)]
     pub async fn find_sftp_id_for_session(&self, session_id: &str) -> Result<String, String> {
         let connection_id = self.find_connection_for_session(session_id).await?;
         let sftp_sessions = self.sftp_sessions.read().await;
@@ -144,6 +189,206 @@ impl RemoteRuntime {
             .find(|record| record.info.connection_id == connection_id)
             .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?;
         Ok(record.info.sftp_id.clone())
+    }
+
+    /// 流式上传：从任意 AsyncRead 直写到远端 SFTP 文件。
+    ///
+    /// 与 UI 的 `transfer_upload` 共用底层 `copy_async` 字节循环——同一份缓冲常量、
+    /// 同一份 read/write 错误处理。这里不需要进度上报 / 暂停 / 历史，传 dummy 信号即可。
+    ///
+    /// 仍占用一个 `transfer_slots` 信号量名额，避免并发请求把 SFTP 通道打爆。
+    pub async fn api_upload_stream<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        session_id: &str,
+        remote_path: &str,
+        reader: &mut R,
+    ) -> Result<u64, String> {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        let connection_id = self.find_connection_for_session(session_id).await?;
+        let sftp_record = {
+            let sftp_sessions = self.sftp_sessions.read().await;
+            sftp_sessions
+                .values()
+                .find(|record| record.info.connection_id == connection_id)
+                .cloned()
+                .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?
+        };
+        let _permit = sftp_record
+            .transfer_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| format!("获取传输配额失败: {}", e))?;
+        let sftp = sftp_record.next_transfer_session().await;
+        let normalized = normalize_remote_path(remote_path);
+        let mut remote = sftp
+            .open_with_flags(
+                normalized,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+            )
+            .await
+            .map_err(|e| format!("打开远程文件失败: {}", e))?;
+
+        // dummy 信号：API 路径没有 pause/cancel 概念（HTTP 请求生命周期已经覆盖了）
+        let dummy_cancel = AtomicBool::new(false);
+        let dummy_paused = AtomicBool::new(false);
+        let bytes_done = AtomicU64::new(0);
+
+        super::transfer::copy_async(
+            reader,
+            &mut remote,
+            4 * 1024 * 1024,
+            &dummy_cancel,
+            &dummy_paused,
+            &bytes_done,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(bytes_done.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// 多 File handle 并行流式下载：与 UI 拖拽下载共用同一套并行思路，区别在于
+    /// 终点是 HTTP `Body::from_stream` 而非本地文件。
+    ///
+    /// 调用方应在 `total_len >= PARALLEL_DOWNLOAD_THRESHOLD` 且 `parts >= 2` 时
+    /// 才走这条路径；否则单 handle + ReaderStream 就够了。
+    ///
+    /// 工作流：N 个 spawn worker，各自 `next_transfer_session` 拿一个 SftpSession，
+    /// 各自 `open(path) + seek(chunk_start)` 拿独立 File handle，按 chunk_len 读取
+    /// 并 `tx.send(Bytes)` 到自己的 mpsc。主返回的 OrderedChunkStream 顺序消费。
+    pub async fn parallel_download_stream(
+        &self,
+        session_id: &str,
+        path: String,
+        start_offset: u64,
+        total_len: u64,
+        parts: u64,
+        buffer_size: usize,
+    ) -> Result<OrderedChunkStream, String> {
+        if total_len == 0 {
+            // 空 range（理论上调用方应避免走这里），返回空流即可
+            return Ok(OrderedChunkStream {
+                receivers: VecDeque::new(),
+            });
+        }
+
+        let connection_id = self.find_connection_for_session(session_id).await?;
+        let sftp_record = {
+            let sftp_sessions = self.sftp_sessions.read().await;
+            sftp_sessions
+                .values()
+                .find(|record| record.info.connection_id == connection_id)
+                .cloned()
+                .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?
+        };
+
+        // 占用一个 transfer 配额，避免并行 worker 把通道挤爆。
+        // 占用持续整个流式响应期间，由 worker 任务持有 permit；最后一个 worker
+        // 退出后 permit 自动释放。
+        let permit = sftp_record
+            .transfer_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| format!("获取传输配额失败: {}", e))?;
+        let permit = Arc::new(permit);
+
+        let parts = parts.max(2);
+        let chunk_size = total_len / parts;
+        let mut receivers: VecDeque<mpsc::Receiver<io::Result<Bytes>>> =
+            VecDeque::with_capacity(parts as usize);
+
+        log::info!(
+            "API 并行下载启动：{} 字节 / {} 路 (chunk≈{} 字节)",
+            total_len,
+            parts,
+            chunk_size
+        );
+
+        for i in 0..parts {
+            let chunk_start = start_offset + i * chunk_size;
+            let chunk_len = if i == parts - 1 {
+                total_len - i * chunk_size
+            } else {
+                chunk_size
+            };
+
+            let (tx, rx) = mpsc::channel::<io::Result<Bytes>>(PER_WORKER_QUEUE_DEPTH);
+            let task_sftp = sftp_record.next_transfer_session().await;
+            let task_path = path.clone();
+            let task_permit = permit.clone();
+
+            tokio::spawn(async move {
+                // permit 跟随 task 生命周期；最后一个 task 退出时 Arc 计数归零自动 drop。
+                let _hold_permit = task_permit;
+
+                let mut file = match task_sftp.open(task_path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("打开远程文件失败: {}", e),
+                            )))
+                            .await;
+                        return;
+                    }
+                };
+
+                if chunk_start > 0 {
+                    use tokio::io::AsyncSeekExt;
+                    if let Err(e) = file.seek(std::io::SeekFrom::Start(chunk_start)).await {
+                        let _ = tx
+                            .send(Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("seek 远程文件失败: {}", e),
+                            )))
+                            .await;
+                        return;
+                    }
+                }
+
+                use tokio::io::AsyncReadExt;
+                let mut remaining = chunk_len;
+                let mut buf = vec![0u8; buffer_size];
+                while remaining > 0 {
+                    let to_read = std::cmp::min(remaining as usize, buf.len());
+                    match file.read(&mut buf[..to_read]).await {
+                        Ok(0) => {
+                            let _ = tx
+                                .send(Err(io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    format!("远端文件提前结束：还差 {} 字节", remaining),
+                                )))
+                                .await;
+                            return;
+                        }
+                        Ok(n) => {
+                            let chunk = Bytes::copy_from_slice(&buf[..n]);
+                            // 发送失败 → 客户端断开 / 主流被丢弃 → 静默退出。
+                            if tx.send(Ok(chunk)).await.is_err() {
+                                return;
+                            }
+                            remaining -= n as u64;
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(Err(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("读取远程文件失败: {}", e),
+                                )))
+                                .await;
+                            return;
+                        }
+                    }
+                }
+            });
+
+            receivers.push_back(rx);
+        }
+
+        Ok(OrderedChunkStream { receivers })
     }
 
     /// Start a tunnel (port forward) based on a TunnelConfig. Returns (bind_host, bind_port, forward_id).

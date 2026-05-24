@@ -1,6 +1,6 @@
 [package]
 name = "helm"
-version = "0.0.28"
+version = "0.0.29"
 description = "A Tauri SSH and SFTP desktop workbench prototype"
 authors = ["HelM"]
 edition = "2021"
@@ -22,7 +22,8 @@ hex = "0.4"
 hmac = "0.12"
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-axum = { version = "0.8", features = ["multipart", "ws"] }
+axum = { version = "0.8" }
+yawc = { version = "0.3", features = ["axum"] }
 tower-http = { version = "0.6", features = ["cors"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 russh = "0.60.2"
@@ -50,3 +51,8 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# 用本地 vendor 副本覆盖 crates.io 版本，便于给 russh-sftp 打补丁
+# （加 read pipelining 撬开 SFTP 单 File handle 串行 read 的瓶颈）。
+[patch.crates-io]
+russh-sftp = { path = "../vendor/russh-sftp" }

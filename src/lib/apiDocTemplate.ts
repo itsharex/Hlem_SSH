@@ -9,6 +9,7 @@ export interface ApiDocParams {
 export function buildApiDoc(params: ApiDocParams): string {
   const { port, apiKey, sessionId, sessionName, sessionHost } = params;
   const wsBase = `ws://127.0.0.1:${port}`;
+  const httpBase = `http://127.0.0.1:${port}`;
   const sid = sessionId || "<sessionId>";
   const session = sessionName
     ? `会话: ${sessionName}${sessionHost ? ` (${sessionHost})` : ""} | ID: ${sid}`
@@ -16,71 +17,72 @@ export function buildApiDoc(params: ApiDocParams): string {
 
   return `# HelM AI API
 
-WebSocket 是主通道（一次鉴权，长连接），上传/下载走 HTTP 但需先在 WS 上申请一次性票据（ticket）。
-HTTP /api/auth 仅用于在打开 WS 之前测试 API Key 是否有效。
+这是给 AI 客户端使用的本地控制 API。WebSocket 是主通道；上传/下载走 HTTP，但必须先通过 WebSocket 申请一次性 ticket。
 
-## 连接
+## 连接与鉴权
 
 WS: ${wsBase}/api/ws
-Header: Authorization: Bearer ${apiKey}
-（浏览器无法设置 header 时改用 \`?token=${apiKey}\` 查询参数）
+Auth: Header \`Authorization: Bearer ${apiKey}\`
+Browser fallback: \`${wsBase}/api/ws?token=${apiKey}\`
 ${session}
 
-## HTTP 端点
+可选探活: \`GET ${httpBase}/api/auth\`，同样使用 Bearer header。WebSocket 支持自动协商 permessage-deflate，客户端通常无需特殊处理。
 
-GET  /api/auth     — 验证 API Key（Header: Bearer ${apiKey}，可选探活）
-POST /api/upload   — 上传文件（?ticket=... + multipart: sessionId, remotePath, file）
-GET  /api/download — 下载文件（?ticket=&sessionId=&path= → 二进制流）
+## WebSocket 协议
 
-> upload/download 不再接受 Authorization header；必须先通过 WS issue-ticket 拿票，
-> 票据 60 秒过期、一次性、与 sessionId 和用途（upload / download）绑定。
+请求统一是 JSON Text frame: \`{ "id": string, "type": string, ...fields }\`
+普通结果: \`{ "id": "...", "type": "result", "data": ... }\`
+错误: \`{ "id": "...", "type": "error", "error": "..." }\`
 
-## WebSocket 请求类型
+| type | fields | result |
+| --- | --- | --- |
+| ping | - | \`pong\` |
+| cancel | \`id\` 取要取消的请求 id | \`cancelled\` |
+| list-sessions | - | 会话数组 |
+| list-files | \`sessionId,path\` | 文件数组 |
+| exec | \`sessionId,command,timeoutMs?,binary?\` | 流式输出，最后 \`done\` |
+| issue-ticket | \`sessionId?,purpose:"upload"\\|"download"\` | \`ticket,purpose,expiresIn\` |
+| list-tunnels | - | 隧道数组 |
+| create-tunnel | \`input:{name,sessionId,forwardType,bindHost,bindPort,targetHost,targetPort}\` | 隧道数组 |
+| update-tunnel | \`tunnelId,input:{...}\` | 隧道数组 |
+| delete-tunnel | \`tunnelId\` | 隧道数组 |
+| start-tunnel | \`tunnelId\` | \`{forwardId,bindHost,bindPort}\` |
+| stop-tunnel | \`tunnelId\` | \`{success:true}\` |
+| backup-settings | - | 备份设置 |
+| update-backup-settings | \`settings\` | 备份设置 |
+| backup-records | - | 备份记录数组 |
+| run-backup | - | 本次备份结果数组 |
+| delete-backup-record | \`recordId,deleteFile?\` | 备份记录数组 |
 
-| type | 说明 | 字段 |
-|------|------|------|
-| issue-ticket | 申请上传/下载票 | sessionId?, purpose:"upload"\\|"download" |
-| exec | 执行命令（流式） | sessionId, command, timeoutMs?, binary? |
-| list-sessions | 已连接会话 | — |
-| list-files | 浏览目录 | sessionId, path |
-| list-tunnels | 隧道列表 | — |
-| create-tunnel | 新建隧道 | input:{name,sessionId,forwardType,bindHost,bindPort,targetHost,targetPort} |
-| update-tunnel | 编辑隧道 | tunnelId, input:{...} |
-| delete-tunnel | 删除隧道 | tunnelId |
-| start-tunnel | 启动隧道 | tunnelId |
-| stop-tunnel | 停止隧道 | tunnelId |
-| backup-settings | 备份配置 | — |
-| update-backup-settings | 更新备份配置 | settings:{...} |
-| backup-records | 备份记录 | — |
-| run-backup | 立即备份 | — |
-| delete-backup-record | 删除记录 | recordId, deleteFile? |
-| cancel | 取消请求 | id(同目标请求) |
-| ping | 保活 | — |
-
-## 请求/响应示例
+## 常用消息
 
 \`\`\`jsonc
-// 1) 执行命令
-{ "id": "1", "type": "exec", "sessionId": "${sid}", "command": "uname -a" }
-{ "id": "1", "type": "stdout", "data": "Linux ...", "binary": false }
-{ "id": "1", "type": "done", "exitCode": 0, "timedOut": false, "durationMs": 37 }
-
-// 2) 申请上传/下载票，再走 HTTP（purpose 决定走哪个端点）
-{ "id": "2", "type": "issue-ticket", "sessionId": "${sid}", "purpose": "download" }  // 或 "upload"
-{ "id": "2", "type": "ticket", "ticket": "<60s 一次性>", "purpose": "download", "expiresIn": 60 }
-
-// purpose=download → GET /api/download?ticket=<...>&sessionId=${sid}&path=/etc/hostname
-// purpose=upload   → POST /api/upload?ticket=<...>
-//                    multipart 字段顺序：sessionId → remotePath → file
+{ "id": "1", "type": "list-sessions" }
+{ "id": "2", "type": "list-files", "sessionId": "${sid}", "path": "/" }
+{ "id": "3", "type": "exec", "sessionId": "${sid}", "command": "uname -a", "timeoutMs": 30000 }
+{ "id": "3", "type": "stdout", "data": "Linux ...", "binary": false }
+{ "id": "3", "type": "done", "exitCode": 0, "timedOut": false, "durationMs": 37, "binary": false }
+{ "id": "4", "type": "issue-ticket", "sessionId": "${sid}", "purpose": "download" }
+{ "id": "4", "type": "ticket", "ticket": "<ticket>", "purpose": "download", "expiresIn": 60 }
 \`\`\`
+
+## 文件传输
+
+HTTP 上传/下载不接受 Authorization header，必须先走 \`issue-ticket\`。ticket 一次性、60 秒过期，并绑定 purpose 与 sessionId；每个 HTTP 请求都要新 ticket。
+
+Upload: \`PUT ${httpBase}/api/upload?ticket=<ticket>&sessionId=${sid}&remotePath=/tmp/foo\`
+Body: 文件原始字节流。成功返回 \`{success,remotePath,size}\`。
+
+Download: \`GET ${httpBase}/api/download?ticket=<ticket>&sessionId=${sid}&path=/tmp/foo\`
+支持 \`Range: bytes=start-end\`，成功返回文件字节；Range 越界返回 416。
 
 ## 规则
 
-- sessionId: ${sid}
-- binary=true 时 data 为 base64，默认 false（UTF-8）
-- timeoutMs 默认 30000，超时返回 exitCode=124
-- error 含"未连接"→ 提示用户在 HelM 手动连接，不要自动重试
+- 默认 sessionId: ${sid}
+- \`exec.timeoutMs\` 默认 30000；超时通常返回 \`exitCode=124,timedOut=true\`
+- \`exec.binary=false\`: stdout/stderr 走 JSON Text frame，字段为 \`data\`
+- \`exec.binary=true\`: stdout/stderr 走 Binary frame，格式 \`[u8 stream][u8 id_len][id_bytes][payload]\`，stream 0=stdout、1=stderr；最后仍有 JSON \`done\`
+- error 包含"未连接"时，提示用户在 HelM 手动连接，不要自动重试
 - 危险命令（rm -rf /usr、shutdown 等）被拒绝
-- ticket 一次性、60s 过期、绑定 sessionId 和 purpose；不可跨用途重用
-- multipart 上传时 \`sessionId\` 必须排在 \`file\` 之前（服务端在读 file 之前会先消费 ticket）`;
+- 服务只监听本机 \`127.0.0.1\`，不要把 API Key 暴露给不可信页面`;
 }

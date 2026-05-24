@@ -58,15 +58,11 @@ pub(super) async fn run_transfer(
         .map_err(remote_error)?;
     let sftp = sftp_record.next_transfer_session().await;
     runtime.mark_transfer_running(app, &info.transfer_id).await;
-    let mut bytes_done = 0u64;
     let buffer_size = if request.accelerated {
         TRANSFER_ACCELERATED_BUFFER_BYTES
     } else {
         TRANSFER_BUFFER_BYTES
     };
-    let mut buffer = vec![0u8; buffer_size];
-    let mut last_emit = Instant::now();
-    let mut last_emit_bytes = 0u64;
     match request.direction {
         TransferDirection::Upload => {
             let mut local = File::open(&request.local_path)
@@ -100,8 +96,6 @@ pub(super) async fn run_transfer(
                     .seek(SeekFrom::Start(resume_from))
                     .await
                     .map_err(remote_error)?;
-                bytes_done = resume_from;
-                emit_transfer_progress(runtime, app, &info.transfer_id, bytes_done, 0.0).await;
             }
             let remote_flags = if resume_from > 0 {
                 OpenFlags::CREATE | OpenFlags::WRITE
@@ -117,44 +111,43 @@ pub(super) async fn run_transfer(
                     .seek(SeekFrom::Start(resume_from))
                     .await
                     .map_err(remote_error)?;
-                last_emit_bytes = bytes_done;
             }
-            loop {
-                if wait_while_paused(&paused, &cancel).await? {
-                    last_emit = Instant::now();
-                    last_emit_bytes = bytes_done;
-                }
-                let read = local.read(&mut buffer).await.map_err(remote_error)?;
-                if read == 0 {
-                    break;
-                }
-                if wait_while_paused(&paused, &cancel).await? {
-                    last_emit = Instant::now();
-                    last_emit_bytes = bytes_done;
-                }
-                remote
-                    .write_all(&buffer[..read])
-                    .await
-                    .map_err(remote_error)?;
-                bytes_done += read as u64;
-                maybe_emit_transfer_progress(
-                    runtime,
-                    app,
-                    &info.transfer_id,
-                    bytes_done,
-                    &mut last_emit,
-                    &mut last_emit_bytes,
-                )
-                .await;
+
+            let bytes_done = Arc::new(AtomicU64::new(resume_from));
+            if resume_from > 0 {
+                emit_transfer_progress(runtime, app, &info.transfer_id, resume_from, 0.0).await;
             }
-            emit_transfer_progress(runtime, app, &info.transfer_id, bytes_done, 0.0).await;
-            remote.flush().await.map_err(remote_error)?;
+
+            let stop_progress = Arc::new(AtomicBool::new(false));
+            let progress_handle = spawn_progress_ticker(
+                runtime.clone(),
+                app.clone(),
+                info.transfer_id.clone(),
+                bytes_done.clone(),
+                cancel.clone(),
+                paused.clone(),
+                stop_progress.clone(),
+            );
+
+            let result = copy_async(
+                &mut local,
+                &mut remote,
+                buffer_size,
+                &cancel,
+                &paused,
+                &bytes_done,
+            )
+            .await;
+
+            stop_progress.store(true, Ordering::Relaxed);
+            let _ = progress_handle.await;
+
+            result?;
+
+            let final_bytes = bytes_done.load(Ordering::Relaxed);
+            emit_transfer_progress(runtime, app, &info.transfer_id, final_bytes, 0.0).await;
         }
         TransferDirection::Download => {
-            let mut remote = sftp
-                .open(request.remote_path.clone())
-                .await
-                .map_err(remote_error)?;
             let remote_size = sftp
                 .metadata(request.remote_path.clone())
                 .await
@@ -181,61 +174,88 @@ pub(super) async fn run_transfer(
             } else {
                 0
             };
-            let mut local = if resume_from > 0 {
-                OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .open(&request.local_path)
-                    .await
-                    .map_err(remote_error)?
-            } else {
-                File::create(&request.local_path)
-                    .await
-                    .map_err(remote_error)?
-            };
-            if resume_from > 0 {
-                remote
-                    .seek(SeekFrom::Start(resume_from))
-                    .await
-                    .map_err(remote_error)?;
-                local
-                    .seek(SeekFrom::Start(resume_from))
-                    .await
-                    .map_err(remote_error)?;
-                bytes_done = resume_from;
-                last_emit_bytes = bytes_done;
-                emit_transfer_progress(runtime, app, &info.transfer_id, bytes_done, 0.0).await;
-            }
-            loop {
-                if wait_while_paused(&paused, &cancel).await? {
-                    last_emit = Instant::now();
-                    last_emit_bytes = bytes_done;
-                }
-                let read = remote.read(&mut buffer).await.map_err(remote_error)?;
-                if read == 0 {
-                    break;
-                }
-                if wait_while_paused(&paused, &cancel).await? {
-                    last_emit = Instant::now();
-                    last_emit_bytes = bytes_done;
-                }
-                local
-                    .write_all(&buffer[..read])
-                    .await
-                    .map_err(remote_error)?;
-                bytes_done += read as u64;
-                maybe_emit_transfer_progress(
+
+            // 大文件 + 非续传：走多 File handle 并行下载，撬开 russh-sftp
+            // 单 File 串行 read 的瓶颈（每个独立 handle 都有自己的 in-flight READ）。
+            let should_parallel = remote_size >= PARALLEL_DOWNLOAD_THRESHOLD
+                && resume_from == 0
+                && PARALLEL_DOWNLOAD_PARTS >= 2;
+
+            if should_parallel {
+                run_parallel_download(
                     runtime,
                     app,
-                    &info.transfer_id,
-                    bytes_done,
-                    &mut last_emit,
-                    &mut last_emit_bytes,
+                    &info,
+                    &request,
+                    &sftp_record,
+                    remote_size,
+                    buffer_size,
+                    cancel.clone(),
+                    paused.clone(),
+                )
+                .await?;
+            } else {
+                let mut remote = sftp
+                    .open(request.remote_path.clone())
+                    .await
+                    .map_err(remote_error)?;
+                let mut local = if resume_from > 0 {
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .open(&request.local_path)
+                        .await
+                        .map_err(remote_error)?
+                } else {
+                    File::create(&request.local_path)
+                        .await
+                        .map_err(remote_error)?
+                };
+                if resume_from > 0 {
+                    remote
+                        .seek(SeekFrom::Start(resume_from))
+                        .await
+                        .map_err(remote_error)?;
+                    local
+                        .seek(SeekFrom::Start(resume_from))
+                        .await
+                        .map_err(remote_error)?;
+                }
+
+                let bytes_done = Arc::new(AtomicU64::new(resume_from));
+                if resume_from > 0 {
+                    emit_transfer_progress(runtime, app, &info.transfer_id, resume_from, 0.0).await;
+                }
+
+                let stop_progress = Arc::new(AtomicBool::new(false));
+                let progress_handle = spawn_progress_ticker(
+                    runtime.clone(),
+                    app.clone(),
+                    info.transfer_id.clone(),
+                    bytes_done.clone(),
+                    cancel.clone(),
+                    paused.clone(),
+                    stop_progress.clone(),
+                );
+
+                let result = copy_async(
+                    &mut remote,
+                    &mut local,
+                    buffer_size,
+                    &cancel,
+                    &paused,
+                    &bytes_done,
                 )
                 .await;
+
+                stop_progress.store(true, Ordering::Relaxed);
+                let _ = progress_handle.await;
+
+                result?;
+
+                let final_bytes = bytes_done.load(Ordering::Relaxed);
+                emit_transfer_progress(runtime, app, &info.transfer_id, final_bytes, 0.0).await;
             }
-            emit_transfer_progress(runtime, app, &info.transfer_id, bytes_done, 0.0).await;
-            local.flush().await.map_err(remote_error)?;
         }
     }
     runtime
@@ -260,29 +280,6 @@ pub(super) async fn wait_while_paused(paused: &AtomicBool, cancel: &AtomicBool) 
     Ok(true)
 }
 
-pub(super) async fn maybe_emit_transfer_progress(
-    runtime: &RemoteRuntime,
-    app: &AppHandle,
-    transfer_id: &str,
-    bytes_done: u64,
-    last_emit: &mut Instant,
-    last_emit_bytes: &mut u64,
-) {
-    let elapsed = last_emit.elapsed();
-    let byte_delta = bytes_done.saturating_sub(*last_emit_bytes);
-    if elapsed < TRANSFER_PROGRESS_MIN_INTERVAL && byte_delta < TRANSFER_PROGRESS_MIN_BYTES {
-        return;
-    }
-    let speed_kbps = if elapsed.as_secs_f64() > 0.0 {
-        bytes_per_second_to_kib(byte_delta, elapsed.as_secs_f64())
-    } else {
-        0.0
-    };
-    emit_transfer_progress(runtime, app, transfer_id, bytes_done, speed_kbps).await;
-    *last_emit = Instant::now();
-    *last_emit_bytes = bytes_done;
-}
-
 pub(super) async fn emit_transfer_progress(
     runtime: &RemoteRuntime,
     app: &AppHandle,
@@ -293,4 +290,284 @@ pub(super) async fn emit_transfer_progress(
     runtime
         .mark_transfer_progress(app, transfer_id, bytes_done, speed_kbps)
         .await;
+}
+
+
+
+/// 共享底层字节搬运循环。所有 SFTP 上传 / UI SFTP 下载都走这条路径。
+/// 写在一处的好处：
+///   - 缓冲常量、读写循环、pause/cancel 检查只有一份代码，改一处全生效
+///   - 像之前 `tokio::io::copy` 默认 8KB 缓冲那种 bug 不会再"只在 API 端发生"
+///
+/// 进度上报由调用方负责（独立 ticker 读 `bytes_done` 即可），本函数不直接 emit。
+pub(super) async fn copy_async<R, W>(
+    src: &mut R,
+    dst: &mut W,
+    buffer_size: usize,
+    cancel: &AtomicBool,
+    paused: &AtomicBool,
+    bytes_done: &AtomicU64,
+) -> AppResult<()>
+where
+    R: tokio::io::AsyncRead + Unpin + ?Sized,
+    W: tokio::io::AsyncWrite + Unpin + ?Sized,
+{
+    let mut buffer = vec![0u8; buffer_size];
+    loop {
+        wait_while_paused(paused, cancel).await?;
+        let read = src.read(&mut buffer).await.map_err(remote_error)?;
+        if read == 0 {
+            break;
+        }
+        wait_while_paused(paused, cancel).await?;
+        dst.write_all(&buffer[..read]).await.map_err(remote_error)?;
+        bytes_done.fetch_add(read as u64, Ordering::Relaxed);
+    }
+    dst.flush().await.map_err(remote_error)?;
+    Ok(())
+}
+
+/// UI 层定期 ticker：每 250ms 读 bytes_done 原子，按 1MB 阈值节流上报进度。
+/// 配合 copy_async 使用：调用方先 spawn 这个 ticker，再调 copy_async；
+/// copy_async 返回后 abort 或让其自然退出（cancel 置位时也会退）。
+pub(super) fn spawn_progress_ticker(
+    runtime: RemoteRuntime,
+    app: AppHandle,
+    transfer_id: String,
+    bytes_done: Arc<AtomicU64>,
+    cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_bytes: u64 = bytes_done.load(Ordering::Relaxed);
+        let mut last_time = Instant::now();
+        let mut interval = tokio::time::interval(TRANSFER_PROGRESS_MIN_INTERVAL);
+        loop {
+            interval.tick().await;
+            if stop.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let now = Instant::now();
+            let cur = bytes_done.load(Ordering::Relaxed);
+            let elapsed = now.duration_since(last_time).as_secs_f64();
+            let delta = cur.saturating_sub(last_bytes);
+            if delta < TRANSFER_PROGRESS_MIN_BYTES {
+                continue;
+            }
+            let speed = if elapsed > 0.0 && !paused.load(Ordering::Relaxed) {
+                bytes_per_second_to_kib(delta, elapsed)
+            } else {
+                0.0
+            };
+            emit_transfer_progress(&runtime, &app, &transfer_id, cur, speed).await;
+            last_time = now;
+            last_bytes = cur;
+        }
+    })
+}
+
+
+/// `copy_async` 的有界版本：从 `src` 读取 **恰好 `limit` 字节** 写入 `dst`。
+/// 与 copy_async 共享同一组 cancel / paused / bytes_done 信号，便于多任务协作。
+///
+/// 用于并行下载场景：每个 part task 只搬运分配给自己的字节范围。
+/// 提前遇到 EOF（远端文件比期望短）会返回错误，避免静默生成损坏文件。
+pub(super) async fn copy_n_async<R, W>(
+    src: &mut R,
+    dst: &mut W,
+    limit: u64,
+    buffer_size: usize,
+    cancel: &AtomicBool,
+    paused: &AtomicBool,
+    bytes_done: &AtomicU64,
+) -> AppResult<()>
+where
+    R: tokio::io::AsyncRead + Unpin + ?Sized,
+    W: tokio::io::AsyncWrite + Unpin + ?Sized,
+{
+    let mut buffer = vec![0u8; buffer_size];
+    let mut remaining = limit;
+    while remaining > 0 {
+        // wait_while_paused 仅在 paused 时才检查 cancel；这里加一次直查
+        // 让外部 task 因兄弟任务失败而被 cancel 的场景能快速退出。
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Remote("传输已取消".to_string()));
+        }
+        wait_while_paused(paused, cancel).await?;
+
+        let to_read = std::cmp::min(remaining as usize, buffer.len());
+        let read = src
+            .read(&mut buffer[..to_read])
+            .await
+            .map_err(remote_error)?;
+        if read == 0 {
+            return Err(AppError::Remote(format!(
+                "远端文件提前结束：还差 {} 字节",
+                remaining
+            )));
+        }
+        wait_while_paused(paused, cancel).await?;
+        dst.write_all(&buffer[..read]).await.map_err(remote_error)?;
+        bytes_done.fetch_add(read as u64, Ordering::Relaxed);
+        remaining -= read as u64;
+    }
+    dst.flush().await.map_err(remote_error)?;
+    Ok(())
+}
+
+/// 多 File handle 并行下载：撬开 russh-sftp `File: AsyncRead` 串行 read 的瓶颈。
+///
+/// 同一个 SFTP 通道（或本会话的 transfer 池）允许多个 File handle 并存，
+/// 每个 handle 各自维护 in-flight READ 请求。N 个 handle 并行 ⇒ N 倍读吞吐，
+/// 直至 TCP 单流 cwnd 上限。
+///
+/// 限制：调用方需保证 `remote_size > 0` 且无续传需求（resume_from == 0）。
+/// 任一 part 失败会立即 `cancel.store(true)` 让兄弟 task 自然退出，
+/// 主线程汇总并返回首个真实错误。
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_parallel_download(
+    runtime: &RemoteRuntime,
+    app: &AppHandle,
+    info: &TransferInfo,
+    request: &TransferRequest,
+    sftp_record: &SftpRecord,
+    remote_size: u64,
+    buffer_size: usize,
+    cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+) -> AppResult<()> {
+    // 1) 预分配本地文件：File::create 截断 + set_len 拓展到目标长度。
+    //    随后 drop 原始 handle，每个 task 用 OpenOptions 各自重新打开
+    //    （Windows 默认 share_mode 允许多写者，每 handle 自带 seek 位置）。
+    {
+        let local = File::create(&request.local_path)
+            .await
+            .map_err(remote_error)?;
+        local.set_len(remote_size).await.map_err(remote_error)?;
+        // 显式 drop：关闭 handle，避免后续 OpenOptions 与之竞争。
+        drop(local);
+    }
+
+    let bytes_done = Arc::new(AtomicU64::new(0));
+    let stop_progress = Arc::new(AtomicBool::new(false));
+    let progress_handle = spawn_progress_ticker(
+        runtime.clone(),
+        app.clone(),
+        info.transfer_id.clone(),
+        bytes_done.clone(),
+        cancel.clone(),
+        paused.clone(),
+        stop_progress.clone(),
+    );
+
+    let chunk_size = remote_size / PARALLEL_DOWNLOAD_PARTS;
+    let mut handles: Vec<JoinHandle<AppResult<()>>> =
+        Vec::with_capacity(PARALLEL_DOWNLOAD_PARTS as usize);
+
+    log::info!(
+        "并行下载启动：{} 字节 / {} 路 (chunk≈{} 字节)",
+        remote_size,
+        PARALLEL_DOWNLOAD_PARTS,
+        chunk_size
+    );
+
+    for i in 0..PARALLEL_DOWNLOAD_PARTS {
+        let start = i * chunk_size;
+        let len = if i == PARALLEL_DOWNLOAD_PARTS - 1 {
+            remote_size - start
+        } else {
+            chunk_size
+        };
+
+        // 每个 task 抓一个 transfer 池里的 SftpSession（轮询）。
+        // 池里只有 1 个时多 task 共用同一 session，仍可借多 File handle 并行；
+        // 池满（6 个）时各 task 拿到独立 session，并行更彻底。
+        let task_sftp = sftp_record.next_transfer_session().await;
+        let task_remote_path = request.remote_path.clone();
+        let task_local_path = request.local_path.clone();
+        let task_cancel = cancel.clone();
+        let task_paused = paused.clone();
+        let task_bytes_done = bytes_done.clone();
+
+        let handle: JoinHandle<AppResult<()>> = tokio::spawn(async move {
+            let result: AppResult<()> = async {
+                let mut remote_file = task_sftp
+                    .open(task_remote_path)
+                    .await
+                    .map_err(remote_error)?;
+                if start > 0 {
+                    remote_file
+                        .seek(SeekFrom::Start(start))
+                        .await
+                        .map_err(remote_error)?;
+                }
+
+                let mut local_file = OpenOptions::new()
+                    .write(true)
+                    .open(&task_local_path)
+                    .await
+                    .map_err(remote_error)?;
+                if start > 0 {
+                    local_file
+                        .seek(SeekFrom::Start(start))
+                        .await
+                        .map_err(remote_error)?;
+                }
+
+                copy_n_async(
+                    &mut remote_file,
+                    &mut local_file,
+                    len,
+                    buffer_size,
+                    &task_cancel,
+                    &task_paused,
+                    &task_bytes_done,
+                )
+                .await
+            }
+            .await;
+
+            // 任一 task 出错 → 拉取 cancel，让兄弟 task 在下次循环检测时自然退出。
+            if result.is_err() {
+                task_cancel.store(true, Ordering::Relaxed);
+            }
+            result
+        });
+        handles.push(handle);
+    }
+
+    // 顺序 await 每个 handle；因为各 task 自身已在出错时 store cancel，
+    // 兄弟 task 会在 1 个 buffer 周期内主动退出，不会阻塞过久。
+    let mut first_error: Option<AppError> = None;
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+            Err(join_error) => {
+                cancel.store(true, Ordering::Relaxed);
+                if first_error.is_none() {
+                    first_error = Some(AppError::Remote(format!(
+                        "并行下载任务异常退出: {}",
+                        join_error
+                    )));
+                }
+            }
+        }
+    }
+
+    stop_progress.store(true, Ordering::Relaxed);
+    let _ = progress_handle.await;
+
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    let final_bytes = bytes_done.load(Ordering::Relaxed);
+    emit_transfer_progress(runtime, app, &info.transfer_id, final_bytes, 0.0).await;
+    Ok(())
 }

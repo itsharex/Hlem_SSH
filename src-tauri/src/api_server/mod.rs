@@ -12,7 +12,7 @@ use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderValue, Method, StatusCode},
     response::Json,
-    routing::{any, get, post},
+    routing::{any, get, put},
     Router,
 };
 use chrono::Utc;
@@ -43,17 +43,6 @@ pub(self) const TICKET_TTL: Duration = Duration::from_secs(60);
 const TICKET_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 // ─── Public types ──────────────────────────────────────────────────────────────
-
-/// 短期一次性票据，由 WS 鉴权后签发，HTTP upload/download 凭票放行。
-#[derive(Clone)]
-pub(self) struct TicketEntry {
-    /// 绑定的会话 ID（可选）。若 server 启用了 allowed_session_id，
-    /// 签发时会自动绑定到该会话；HTTP 端校验时必须与请求中的 sessionId 一致。
-    pub session_id: Option<String>,
-    /// 签发用途，用于区分 upload / download，避免 ticket 跨用途滥用。
-    pub purpose: TicketPurpose,
-    pub expires_at: Instant,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(self) enum TicketPurpose {
@@ -90,7 +79,9 @@ pub struct ApiServerState {
     #[allow(dead_code)]
     pub log_file: PathBuf,
     pub log_dirty: Arc<Notify>,
-    pub(self) tickets: Arc<RwLock<HashMap<String, TicketEntry>>>,
+    /// 已消费的 ticket nonce → 过期时刻。用于一次性票据的防重放保护。
+    /// HMAC 无状态票据本身不在服务端存储；只保留"已用过"的 nonce 即可。
+    pub(self) consumed_nonces: Arc<RwLock<HashMap<String, Instant>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,7 +191,7 @@ pub async fn start_server(
     let existing_logs = load_logs_from_file(&log_file);
     let logs = Arc::new(RwLock::new(existing_logs));
     let log_dirty = Arc::new(Notify::new());
-    let tickets = Arc::new(RwLock::new(HashMap::<String, TicketEntry>::new()));
+    let consumed_nonces = Arc::new(RwLock::new(HashMap::<String, Instant>::new()));
     let state = ApiServerState {
         api_key: Arc::new(RwLock::new(api_key.clone())),
         app: app.clone(),
@@ -211,7 +202,7 @@ pub async fn start_server(
         logs: logs.clone(),
         log_file: log_file.clone(),
         log_dirty: log_dirty.clone(),
-        tickets: tickets.clone(),
+        consumed_nonces: consumed_nonces.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -228,7 +219,10 @@ pub async fn start_server(
     let app_router = Router::new()
         // HTTP 仅保留：鉴权验证 + 文件上传/下载（二进制流不适合 WS）+ WS 升级
         .route("/api/auth", get(handlers_remote::auth_check))
-        .route("/api/upload", post(handlers_remote::upload_file))
+        // raw PUT：query 带 sessionId / remotePath / ticket，body 是文件原始字节，
+        // 服务端流式直写 SFTP，无 temp 文件、无 multipart 解析。
+        // 可选 Content-Range 头实现并发分块上传（每片自带 ticket + Range，互不阻塞）。
+        .route("/api/upload", put(handlers_remote::upload_file_raw))
         .route("/api/download", get(handlers_remote::download_file))
         .route("/api/ws", any(ws::ws_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY))
@@ -243,9 +237,10 @@ pub async fn start_server(
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
-    // Background ticket cleaner: 周期性扫描过期 ticket 并移除，避免内存泄漏。
+    // Background nonce cleaner: 周期性扫描过期的"已消费 nonce"并移除，避免内存泄漏。
+    // 由于 ticket TTL 60s，最坏情况下集合大小 = TICKET_CLEANUP_INTERVAL 内的消费速率。
     {
-        let tickets_for_cleaner = tickets.clone();
+        let nonces_for_cleaner = consumed_nonces.clone();
         let mut cleaner_shutdown = shutdown_tx.subscribe();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(TICKET_CLEANUP_INTERVAL);
@@ -254,8 +249,8 @@ pub async fn start_server(
                 tokio::select! {
                     _ = ticker.tick() => {
                         let now = Instant::now();
-                        let mut map = tickets_for_cleaner.write().await;
-                        map.retain(|_, entry| entry.expires_at > now);
+                        let mut map = nonces_for_cleaner.write().await;
+                        map.retain(|_, expires_at| *expires_at > now);
                     }
                     _ = cleaner_shutdown.changed() => {
                         if *cleaner_shutdown.borrow_and_update() { break; }

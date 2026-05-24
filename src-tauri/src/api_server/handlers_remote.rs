@@ -1,14 +1,15 @@
-use std::path::PathBuf;
+use std::ops::Bound;
 
 use axum::{
     body::Body,
-    extract::{Multipart, Query, State as AxumState},
+    extract::{Query, State as AxumState},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Json, Response},
 };
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
-use tokio_util::io::ReaderStream;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use super::auth::{consume_ticket, verify_auth, verify_session_access};
 use super::{friendly_error_detail, map_remote_error, push_log, ApiError, ApiServerState, TicketPurpose};
@@ -44,13 +45,16 @@ pub(super) struct UploadResponse {
     size: u64,
 }
 
+/// raw PUT 上传 query。Content-Range 头可选，用于并发分块。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UploadQuery {
-    /// WS 签发的一次性票据。放在 query 中是为了能在解析 multipart 之前先校验，
-    /// 避免持票无效时仍然把整个大文件读入临时文件造成的 DoS。
+pub(super) struct UploadRawQuery {
     #[serde(default)]
     ticket: String,
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    remote_path: String,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +69,6 @@ pub(super) struct DownloadQuery {
 // ─── Handlers ──────────────────────────────────────────────────────────────────
 
 /// HTTP 鉴权验证端点。仅用于 api_key 探活——客户端可在打开 WS 之前测试 key 是否有效。
-/// 真正的业务鉴权全部走 WS（长连接）+ ticket（HTTP upload/download）。
 pub async fn auth_check(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
@@ -76,144 +79,74 @@ pub async fn auth_check(
     Ok(Json(serde_json::json!({
         "authenticated": true,
         "ws": "/api/ws",
-        "uploadFlow": "ws issue-ticket(purpose=upload) → POST /api/upload?ticket=...",
-        "downloadFlow": "ws issue-ticket(purpose=download) → GET /api/download?ticket=...&sessionId=...&path=...",
+        "uploadFlow": "ws issue-ticket(purpose=upload) → PUT /api/upload?ticket=...&sessionId=...&remotePath=... ；可选 Content-Range 实现并发分块",
+        "downloadFlow": "ws issue-ticket(purpose=download) → GET /api/download?ticket=...&sessionId=...&path= (支持 Range)",
     })))
 }
 
-pub async fn upload_file(
+/// raw PUT 上传：流式直写 SFTP，零 temp 文件。
+pub async fn upload_file_raw(
     AxumState(state): AxumState<ApiServerState>,
-    Query(query): Query<UploadQuery>,
-    mut multipart: Multipart,
+    Query(query): Query<UploadRawQuery>,
+    body: Body,
 ) -> Result<Json<UploadResponse>, (StatusCode, Json<ApiError>)> {
-    // 票据必须先解析 sessionId 才能与 ticket 绑定校验，但 ticket 本身的"存在 + 未过期 + 用途"
-    // 这部分可以提前校验，且即便如此也仍然有 DoS 防护：multipart 还没读，正常流程下这里就已拦截。
-    // 由于 consume_ticket 是一次性的，我们把票据完整校验放到 sessionId 解析之后做。
-
-    let mut session_id: Option<String> = None;
-    let mut remote_path: Option<String> = None;
-    let mut temp_file_path: Option<PathBuf> = None;
-    let mut total_size: u64 = 0;
-
-    async fn cleanup_temp(path: &Option<PathBuf>) {
-        if let Some(p) = path.as_ref() { let _ = tokio::fs::remove_file(p).await; }
+    if query.session_id.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 sessionId 查询参数".into() })));
+    }
+    if query.remote_path.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 remotePath 查询参数".into() })));
     }
 
-    // 第一遍只接收非文件字段，用于先做完整票据校验。
-    // 但 multipart 是单向流，所以我们采用：sessionId/remotePath 必须排在 file 字段之前。
-    // 解析时在拿到 file 之前如果已经有 sessionId，先 consume_ticket，再继续读取 file。
-    let mut ticket_consumed = false;
-
-    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
-        (StatusCode::BAD_REQUEST, Json(ApiError { error: format!("解析 multipart 失败: {}", e) }))
-    })? {
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "sessionId" => { session_id = field.text().await.ok(); }
-            "remotePath" => { remote_path = field.text().await.ok(); }
-            "file" => {
-                // 在开始消耗大文件前必须确保票据有效。
-                if !ticket_consumed {
-                    let sid = match session_id.as_deref() {
-                        Some(s) if !s.is_empty() => s,
-                        _ => {
-                            return Err((StatusCode::BAD_REQUEST, Json(ApiError {
-                                error: "multipart 字段顺序错误：file 之前必须先发送 sessionId".into(),
-                            })));
-                        }
-                    };
-                    consume_ticket(&state, &query.ticket, TicketPurpose::Upload, sid).await?;
-                    ticket_consumed = true;
-                }
-
-                let temp = std::env::temp_dir().join(format!("helm_upload_{}", uuid::Uuid::new_v4()));
-                let mut file = match tokio::fs::File::create(&temp).await {
-                    Ok(f) => f,
-                    Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("创建临时文件失败: {}", e) }))),
-                };
-                temp_file_path = Some(temp);
-                loop {
-                    match field.chunk().await {
-                        Ok(Some(chunk)) => {
-                            if let Err(e) = file.write_all(&chunk).await {
-                                cleanup_temp(&temp_file_path).await;
-                                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("写入临时文件失败: {}", e) })));
-                            }
-                            total_size = total_size.saturating_add(chunk.len() as u64);
-                        }
-                        Ok(None) => break,
-                        Err(e) => { cleanup_temp(&temp_file_path).await; return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: format!("读取上传分片失败: {}", e) }))); }
-                    }
-                }
-                if let Err(e) = file.flush().await { cleanup_temp(&temp_file_path).await; return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("刷写临时文件失败: {}", e) }))); }
-            }
-            _ => {}
-        }
-    }
-
-    // 走到这里若仍未消费 ticket，说明根本没有 file 字段。返回错误前不消费票据，
-    // 让客户端可以修正请求后用同一张 ticket 重试（毕竟它从未被验证过）。
-    if !ticket_consumed {
-        cleanup_temp(&temp_file_path).await;
-        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 file 字段".into() })));
-    }
-
-    let session_id = match session_id {
-        Some(v) => v,
-        None => { cleanup_temp(&temp_file_path).await; return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 sessionId 字段".into() }))); }
-    };
-    let remote_path = match remote_path {
-        Some(v) => v,
-        None => { cleanup_temp(&temp_file_path).await; return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 remotePath 字段".into() }))); }
-    };
-    let temp_file = match temp_file_path.clone() {
-        Some(v) => v,
-        None => return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 file 字段".into() }))),
-    };
-
-    let size = total_size;
-    if let Err(forbidden) = verify_session_access(&state, &session_id) { cleanup_temp(&temp_file_path).await; return Err(forbidden); }
-
-    let sftp_id = match state.remote.find_sftp_id_for_session(&session_id).await {
-        Ok(v) => v,
-        Err(e) => { cleanup_temp(&temp_file_path).await; return Err(map_remote_error(e, &state)); }
-    };
+    consume_ticket(&state, &query.ticket, TicketPurpose::Upload, &query.session_id).await?;
+    verify_session_access(&state, &query.session_id)?;
 
     let start = std::time::Instant::now();
-    let transfer_result = state.remote.transfer_upload(&state.app, sftp_id, temp_file.to_string_lossy().to_string(), remote_path.clone(), true, false, false).await;
-    let elapsed_start = start.elapsed().as_millis() as u64;
 
-    let transfer_info = match transfer_result {
-        Ok(info) => info,
+    let stream = body
+        .into_data_stream()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let mut reader = StreamReader::new(stream);
+
+    let bytes_written = match state
+        .remote
+        .api_upload_stream(&query.session_id, &query.remote_path, &mut reader)
+        .await
+    {
+        Ok(n) => n,
         Err(e) => {
-            cleanup_temp(&temp_file_path).await;
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed_start).await;
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })));
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "upload",
+                &friendly_error_detail(&format!("{} → {}", query.remote_path, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            return Err(map_remote_error(e, &state));
         }
     };
 
-    let final_info = state.remote.wait_transfer(&transfer_info.transfer_id).await;
     let elapsed = start.elapsed().as_millis() as u64;
-    cleanup_temp(&temp_file_path).await;
+    push_log(
+        &state,
+        "upload",
+        &format!("{} ({}B, raw)", query.remote_path, bytes_written),
+        true,
+        elapsed,
+    )
+    .await;
 
-    match final_info {
-        Ok(info) if matches!(info.status, crate::remote::TaskStatus::Completed) => {
-            push_log(&state, "upload", &format!("{} ({}B)", remote_path, size), true, elapsed).await;
-            Ok(Json(UploadResponse { success: true, remote_path, size }))
-        }
-        Ok(info) => {
-            let err_msg = info.error.unwrap_or_else(|| "传输失败".to_string());
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, err_msg), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: err_msg })))
-        }
-        Err(e) => {
-            push_log(&state, "upload", &friendly_error_detail(&format!("{} → {}", remote_path, e), &state), false, elapsed).await;
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))
-        }
-    }
+    Ok(Json(UploadResponse {
+        success: true,
+        remote_path: query.remote_path,
+        size: bytes_written,
+    }))
 }
 
+/// 下载：支持 Range 请求 → 206 Partial Content + Content-Range + Accept-Ranges。
 pub async fn download_file(
+    headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<DownloadQuery>,
 ) -> Result<Response<Body>, (StatusCode, Json<ApiError>)> {
@@ -234,34 +167,185 @@ pub async fn download_file(
             return Err((StatusCode::NOT_FOUND, Json(ApiError { error: format!("无法读取远程文件: {}", e) })));
         }
     };
-    let size = metadata.len();
+    let total_size = metadata.len();
 
-    let remote_file = match sftp.open(query.path.clone()).await {
-        Ok(f) => f,
-        Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
-            push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("打开远程文件失败: {}", e) })));
+    let range = parse_range_header(headers.get(header::RANGE), total_size);
+    let (status, start_offset, end_offset) = match range {
+        ParsedRange::Full => (StatusCode::OK, 0u64, total_size.saturating_sub(1)),
+        ParsedRange::Satisfiable { start, end } => (StatusCode::PARTIAL_CONTENT, start, end),
+        ParsedRange::Unsatisfiable => {
+            return Err((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                Json(ApiError { error: format!("Range 越界：文件大小 {} 字节", total_size) }),
+            ));
         }
+        ParsedRange::Invalid => (StatusCode::OK, 0u64, total_size.saturating_sub(1)),
+    };
+    let send_len = if total_size == 0 { 0 } else { end_offset - start_offset + 1 };
+
+    // 大段范围（≥ 32MB）走并行多 File handle，撬开 russh-sftp 单 File 串行 read 的瓶颈。
+    // 与 UI 拖拽下载共用同一套阈值 / 并发度 / 缓冲常量。
+    let body = if send_len >= crate::remote::PARALLEL_DOWNLOAD_THRESHOLD
+        && crate::remote::PARALLEL_DOWNLOAD_PARTS >= 2
+    {
+        match state
+            .remote
+            .parallel_download_stream(
+                &query.session_id,
+                query.path.clone(),
+                start_offset,
+                send_len,
+                crate::remote::PARALLEL_DOWNLOAD_PARTS,
+                crate::remote::TRANSFER_BUFFER_BYTES,
+            )
+            .await
+        {
+            Ok(stream) => Body::from_stream(stream),
+            Err(e) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                push_log(
+                    &state,
+                    "download",
+                    &friendly_error_detail(
+                        &format!("{} → 并行下载初始化失败: {}", query.path, e),
+                        &state,
+                    ),
+                    false,
+                    elapsed,
+                )
+                .await;
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: format!("并行下载初始化失败: {}", e),
+                    }),
+                ));
+            }
+        }
+    } else {
+        let mut remote_file = match sftp.open(query.path.clone()).await {
+            Ok(f) => f,
+            Err(e) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("打开远程文件失败: {}", e) })));
+            }
+        };
+
+        if start_offset > 0 {
+            if let Err(e) = remote_file.seek(std::io::SeekFrom::Start(start_offset)).await {
+                let elapsed = start.elapsed().as_millis() as u64;
+                push_log(&state, "download", &friendly_error_detail(&format!("{} → seek {}: {}", query.path, start_offset, e), &state), false, elapsed).await;
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("seek 远程文件失败: {}", e) })));
+            }
+        }
+
+        let limited = remote_file.take(send_len);
+        let stream = ReaderStream::with_capacity(limited, 1024 * 1024);
+        Body::from_stream(stream)
     };
 
-    let stream = ReaderStream::with_capacity(remote_file, 1024 * 1024);
-    let body = Body::from_stream(stream);
     let elapsed = start.elapsed().as_millis() as u64;
-    push_log(&state, "download", &format!("{} ({}B, 流式)", query.path, size), true, elapsed).await;
+    let parallel_used = send_len >= crate::remote::PARALLEL_DOWNLOAD_THRESHOLD
+        && crate::remote::PARALLEL_DOWNLOAD_PARTS >= 2;
+    let log_detail = if status == StatusCode::PARTIAL_CONTENT {
+        format!(
+            "{} ({}B, range {}-{}/{}{})",
+            query.path,
+            send_len,
+            start_offset,
+            end_offset,
+            total_size,
+            if parallel_used { ", 并行" } else { "" }
+        )
+    } else if parallel_used {
+        format!("{} ({}B, 并行流式)", query.path, send_len)
+    } else {
+        format!("{} ({}B, 流式)", query.path, send_len)
+    };
+    push_log(&state, "download", &log_detail, true, elapsed).await;
 
     let file_name = query.path.rsplit('/').next().unwrap_or("file");
     let safe_name: String = file_name.chars().filter(|c| !c.is_control() && *c != '"' && *c != '\\').collect();
     let disposition = format!("attachment; filename=\"{}\"", safe_name);
 
-    let mut response = Response::builder()
-        .status(StatusCode::OK)
+    let mut builder = Response::builder()
+        .status(status)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::CONTENT_LENGTH, size)
-        .body(body)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("构建响应失败: {}", e) })))?;
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, send_len);
+    if status == StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{}", start_offset, end_offset, total_size),
+        );
+    }
+    let mut response = builder.body(body).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("构建响应失败: {}", e) }))
+    })?;
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
     }
     Ok(response)
+}
+
+// ─── Range / Content-Range parsing ────────────────────────────────────────────
+
+enum ParsedRange {
+    Full,
+    Satisfiable { start: u64, end: u64 },
+    Unsatisfiable,
+    Invalid,
+}
+
+fn parse_range_header(header_value: Option<&HeaderValue>, total: u64) -> ParsedRange {
+    let Some(raw) = header_value.and_then(|v| v.to_str().ok()) else {
+        return ParsedRange::Full;
+    };
+    let raw = raw.trim();
+    let Some(spec) = raw.strip_prefix("bytes=") else {
+        return ParsedRange::Invalid;
+    };
+    let first = spec.split(',').next().unwrap_or("").trim();
+    let (start_s, end_s) = match first.split_once('-') {
+        Some(parts) => parts,
+        None => return ParsedRange::Invalid,
+    };
+
+    if total == 0 {
+        return ParsedRange::Unsatisfiable;
+    }
+
+    let (start, end) = if start_s.is_empty() {
+        let suffix: u64 = match end_s.parse() {
+            Ok(v) if v > 0 => v,
+            _ => return ParsedRange::Invalid,
+        };
+        let len = suffix.min(total);
+        let start = total - len;
+        let end = total - 1;
+        (Bound::Included(start), Bound::Included(end))
+    } else {
+        let start: u64 = match start_s.parse() {
+            Ok(v) => v,
+            Err(_) => return ParsedRange::Invalid,
+        };
+        let end: u64 = if end_s.is_empty() {
+            total - 1
+        } else {
+            match end_s.parse::<u64>() {
+                Ok(v) => v.min(total - 1),
+                Err(_) => return ParsedRange::Invalid,
+            }
+        };
+        (Bound::Included(start), Bound::Included(end))
+    };
+
+    let (Bound::Included(start), Bound::Included(end)) = (start, end) else {
+        return ParsedRange::Invalid;
+    };
+    if start >= total || end < start {
+        return ParsedRange::Unsatisfiable;
+    }
+    ParsedRange::Satisfiable { start, end }
 }

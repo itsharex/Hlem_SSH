@@ -217,10 +217,10 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
             <div className="aiApiEndpointScroll">
               <div className="aiApiEndpointItem"><code>WS /api/ws</code> — 主通道（主鉴权）</div>
               <div className="aiApiEndpointItem"><code>GET /api/auth</code> — 验证 API Key（探活，可选）</div>
-              <div className="aiApiEndpointItem"><code>POST /api/upload?ticket=...</code> — 上传文件（凭 WS 签发的票）</div>
-              <div className="aiApiEndpointItem"><code>GET /api/download?ticket=...</code> — 下载文件（凭 WS 签发的票）</div>
+              <div className="aiApiEndpointItem"><code>PUT /api/upload?ticket=&amp;sessionId=&amp;remotePath=</code> — 流式上传</div>
+              <div className="aiApiEndpointItem"><code>GET /api/download?ticket=...</code> — 下载文件（支持 Range 断点续传）</div>
             </div>
-            <p className="aiApiEndpointNote">WS 一次握手即完成鉴权，承载全部操作；上传/下载需额外凭 WS 签发的一次性票据访问 HTTP。</p>
+            <p className="aiApiEndpointNote">WS 一次握手即完成鉴权，承载全部操作；上传/下载需额外凭 WS 签发的一次性 HMAC 票据访问 HTTP。</p>
           </div>
         )}
         <div className="aiApiActions">
