@@ -126,6 +126,10 @@ function App() {
   const autoUpdateScheduledRef = useRef(false);
   const pendingConnectionIdsRef = useRef<Map<string, string>>(new Map());
   const abortedConnectSessionsRef = useRef<Set<string>>(new Set());
+  // 追踪由 UI 自己 connectSession() 在驱动的会话；AI API 走 /api/connect 拉起的会话
+  // 不会被加进来 → handleSshStatus 收到 connected 事件时即可分辨"外部连接"，
+  // 自动补齐终端 / SFTP / 遥测以保持 UI 和后端状态一致。
+  const uiInitiatedConnectsRef = useRef<Set<string>>(new Set());
   const openSessions = useMemo(
     () => openSessionIds.map((id) => sessions.find((session) => session.id === id)).filter(Boolean) as RemoteSession[],
     [openSessionIds, sessions],
@@ -860,6 +864,16 @@ function App() {
             telemetry: createEmptyTelemetry(session.host),
           };
         }
+        // 外部（AI API /api/connect）拉起的连接：UI 没有走自己的 connectSession()，
+        // 但后端事件已经把会话状态推过来。补齐 UI 侧的终端 / SFTP / 遥测，让本来
+        // 显示"重新打开终端 / SFTP 未连接"的面板自动变成可用状态。
+        if (
+          payload.status === "connected"
+          && !uiInitiatedConnectsRef.current.has(session.id)
+          && !session.terminalId
+        ) {
+          void backfillExternalConnection(session.id, payload.connectionId, session.username, session.currentPath);
+        }
         return {
           ...session,
           state: payload.status,
@@ -867,6 +881,65 @@ function App() {
         };
       }),
     );
+  }
+
+  /**
+   * 外部入口（目前只有 AI API `/api/connect`）建立 SSH 连接后，UI 侧主动补齐
+   * 终端 / SFTP / 遥测，行为与 connectSession() 后半段一致。
+   *
+   * 不重复发起 SSH 连接 —— connectionId 已由后端在事件里给出。
+   * 若任一子系统打开失败，仅记录到终端 buffer，不把整个会话标记 failed
+   * （SSH 主连接还是好的）。
+   */
+  async function backfillExternalConnection(
+    sessionId: string,
+    connectionId: string,
+    username: string,
+    currentPath: string,
+  ) {
+    // 防止与同一时刻的 UI connectSession() 撞车
+    if (uiInitiatedConnectsRef.current.has(sessionId)) return;
+    const initialPath = initialRemotePath(username, currentPath);
+
+    // 终端
+    try {
+      const terminal = await remoteApi.openTerminal(connectionId, 100, 30);
+      terminalSessionMapRef.current.set(terminal.terminalId, sessionId);
+      updateSession(sessionId, (item) => ({
+        ...item,
+        terminalId: terminal.terminalId,
+      }));
+    } catch (error) {
+      appendTerminal(sessionId, "error", `终端不可用：${getErrorMessage(error)}`);
+    }
+
+    // SFTP（后端的 api_connect_session 已经开过一份；这里再开一份给 UI 用，
+    // 是有意为之 —— 保持 UI 与 AI API 各自有独立 sftp_id，互不干扰）
+    openSftpWithFiles(connectionId, initialPath, username).then((sftpResult) => {
+      const sftp = sftpResult.sftp;
+      if (sftp) rememberTransferTarget(sftp.sftpId, sessionId);
+      updateSession(sessionId, (item) => ({
+        ...item,
+        currentPath: sftp ? sftpResult.path : item.currentPath,
+        sftpId: sftp?.sftpId ?? null,
+        files: sftpResult.files.length > 0 ? sftpResult.files : item.files,
+        terminal: sftpResult.error
+          ? [...item.terminal, createTerminalEntry("error", `SFTP 不可用：${sftpUnavailableMessage(sftpResult.error)}`)]
+          : item.terminal,
+      }));
+    });
+
+    // 遥测
+    Promise.all([
+      remoteApi.startTelemetry(connectionId, sessionId, 5000).catch(() => null),
+      remoteApi.telemetrySnapshot(connectionId).catch(() => null),
+    ]).then(([telemetryJob, initialTelemetry]) => {
+      updateSession(sessionId, (item) => ({
+        ...item,
+        telemetryJobId: telemetryJob?.jobId ?? item.telemetryJobId,
+        telemetry: initialTelemetry && hasTelemetryData(initialTelemetry) ? initialTelemetry : item.telemetry,
+      }));
+    });
   }
 
   function handleSftpChanged(payload: SftpChangedEvent) {
@@ -987,6 +1060,7 @@ function App() {
   async function connectSession(session = activeSession) {
     if (!session || connectingSessionId === session.id) return;
     abortedConnectSessionsRef.current.delete(session.id);
+    uiInitiatedConnectsRef.current.add(session.id);
     setConnectingSessionId(session.id);
     updateSession(session.id, (item) => ({ ...item, state: "connecting" }));
     let connection: Awaited<ReturnType<typeof remoteApi.connect>> | null = null;
@@ -1104,6 +1178,7 @@ function App() {
       }
     } finally {
       abortedConnectSessionsRef.current.delete(session.id);
+      uiInitiatedConnectsRef.current.delete(session.id);
       setConnectingSessionId((current) => (current === session.id ? null : current));
     }
   }
