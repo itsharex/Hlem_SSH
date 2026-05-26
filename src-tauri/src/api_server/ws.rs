@@ -23,9 +23,8 @@ use yawc::{
 
 use crate::remote::ExecStreamChunk;
 
-use super::auth::issue_ticket;
 use super::guard::check_dangerous_command;
-use super::{friendly_error_detail, push_log, push_log_with_response, ApiServerState, TicketPurpose, TICKET_TTL};
+use super::{friendly_error_detail, push_log, push_log_with_response, ApiServerState};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct WsTokenQuery {
@@ -172,42 +171,6 @@ async fn handle_request(
             }
             return;
         }
-        "issue-ticket" => {
-            // 由 WS 签发短期一次性票据，HTTP upload/download 凭票放行。
-            // 已经通过 WS 握手鉴权 → 此处不再校验 api_key。
-            let purpose_str = value.get("purpose").and_then(|v| v.as_str()).unwrap_or("");
-            let purpose = match TicketPurpose::parse(purpose_str) {
-                Some(p) => p,
-                None => {
-                    let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "purpose 必须为 upload 或 download"))).await;
-                    return;
-                }
-            };
-            // sessionId 优先取请求中的；若 server 配了 allowed_session_id，
-            // 自动绑定到允许的会话（防止越权）。
-            let req_session = value.get("sessionId").and_then(|v| v.as_str()).map(String::from);
-            let bound_session = match (&state.allowed_session_id, &req_session) {
-                (Some(allowed), Some(req)) if allowed != req => {
-                    let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
-                    return;
-                }
-                (Some(allowed), _) => Some(allowed.clone()),
-                (None, req) => req.clone(),
-            };
-            let bound_session_log = bound_session.clone().unwrap_or_else(|| "<any>".into());
-            let ticket = issue_ticket(&state, bound_session, purpose).await;
-            let _ = tx.send(ws_text_frame(&WsResponse {
-                id,
-                r#type: "ticket".into(),
-                payload: serde_json::json!({
-                    "ticket": ticket,
-                    "purpose": purpose.as_str(),
-                    "expiresIn": TICKET_TTL.as_secs(),
-                }),
-            })).await;
-            push_log(&state, "ws/issue-ticket", &format!("{} → {}", purpose.as_str(), bound_session_log), true, 0).await;
-            return;
-        }
         _ => {}
     }
 
@@ -221,58 +184,23 @@ async fn handle_request(
     let handle = tokio::spawn(async move {
         match req_type_for_job.as_str() {
             "exec" => handle_ws_exec(value_for_job, job_id.clone(), tx_for_job, state_for_job).await,
-            "list-sessions" => handle_ws_list_sessions(job_id.clone(), tx_for_job, state_for_job).await,
-            "list-files" => handle_ws_list_files(value_for_job, job_id.clone(), tx_for_job, state_for_job).await,
-            // 隧道管理
-            "list-tunnels" | "create-tunnel" | "update-tunnel" | "delete-tunnel"
-            | "start-tunnel" | "stop-tunnel" => {
-                handle_ws_tunnel(req_type_for_job, value_for_job, job_id.clone(), tx_for_job, state_for_job).await
+            other => {
+                let _ = tx_for_job
+                    .send(ws_text_frame(&WsResponse::error(
+                        &job_id,
+                        &format!(
+                            "未知请求类型: {}（WS 仅保留 exec / cancel / ping，其它请用 HTTP REST）",
+                            other
+                        ),
+                    )))
+                    .await;
             }
-            // 备份管理
-            "backup-settings" | "update-backup-settings" | "backup-records"
-            | "run-backup" | "delete-backup-record" => {
-                handle_ws_backup(req_type_for_job, value_for_job, job_id.clone(), tx_for_job, state_for_job).await
-            }
-            other => { let _ = tx_for_job.send(ws_text_frame(&WsResponse::error(&job_id, &format!("未知请求类型: {}", other)))).await; }
         }
         jobs_for_cleanup.write().await.remove(&job_id);
     });
 
     if !id.is_empty() {
         jobs.write().await.insert(id, handle);
-    }
-}
-
-async fn handle_ws_list_sessions(id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
-    let sessions = state.remote.list_connected_sessions().await;
-    let count = sessions.len();
-    let _ = tx.send(ws_text_frame(&WsResponse::result(&id, sessions))).await;
-    push_log(&state, "ws/sessions", &format!("{} 项", count), true, 0).await;
-}
-
-async fn handle_ws_list_files(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
-    let session_id = value.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string();
-    if session_id.is_empty() {
-        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "缺少 sessionId"))).await;
-        return;
-    }
-    if state.allowed_session_id.as_deref().map(|s| s != session_id.as_str()).unwrap_or(false) {
-        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "无权访问该会话，仅允许指定会话"))).await;
-        return;
-    }
-    let start = std::time::Instant::now();
-    match state.remote.api_list_files(&session_id, &path).await {
-        Ok(entries) => {
-            let elapsed = start.elapsed().as_millis() as u64;
-            push_log(&state, "ws/files", &format!("{} ({} 项)", path, entries.len()), true, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, entries))).await;
-        }
-        Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
-            push_log(&state, "ws/files", &friendly_error_detail(&format!("{} → {}", path, e), &state), false, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
-        }
     }
 }
 
@@ -379,139 +307,6 @@ async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, s
     }
 }
 
-async fn handle_ws_tunnel(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
-    let start = std::time::Instant::now();
-    let result: Result<JsonValue, String> = async {
-        match action.as_str() {
-            "list-tunnels" => {
-                let store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let t = store.tunnels().map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(t).unwrap_or_default())
-            }
-            "create-tunnel" => {
-                let input: crate::config::TunnelInput = serde_json::from_value(value.get("input").cloned().unwrap_or_default()).map_err(|e| format!("参数错误: {}", e))?;
-                let mut store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.create_tunnel(input).map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(snap.data.tunnels).unwrap_or_default())
-            }
-            "update-tunnel" => {
-                let tunnel_id = value.get("tunnelId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let input: crate::config::TunnelInput = serde_json::from_value(value.get("input").cloned().unwrap_or_default()).map_err(|e| format!("参数错误: {}", e))?;
-                let mut store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.update_tunnel(&tunnel_id, input).map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(snap.data.tunnels).unwrap_or_default())
-            }
-            "delete-tunnel" => {
-                let tunnel_id = value.get("tunnelId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let mut store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.delete_tunnel(&tunnel_id).map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(snap.data.tunnels).unwrap_or_default())
-            }
-            "start-tunnel" => {
-                let tunnel_id = value.get("tunnelId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let tunnel = {
-                    let store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                    let tunnels = store.tunnels().map_err(|e| e.to_string())?;
-                    tunnels.into_iter().find(|t| t.id == tunnel_id).ok_or_else(|| format!("隧道 {} 不存在", tunnel_id))?
-                };
-                let (bind_host, bind_port, forward_id) = state.remote.api_start_tunnel(&tunnel).await?;
-                Ok(serde_json::json!({ "forwardId": forward_id, "bindHost": bind_host, "bindPort": bind_port }))
-            }
-            "stop-tunnel" => {
-                let tunnel_id = value.get("tunnelId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                state.remote.api_stop_tunnel(&tunnel_id).await?;
-                Ok(serde_json::json!({ "success": true }))
-            }
-            _ => Err(format!("未知隧道操作: {}", action)),
-        }
-    }.await;
-    let elapsed = start.elapsed().as_millis() as u64;
-    match result {
-        Ok(data) => {
-            push_log(&state, &format!("ws/{}", action), "OK", true, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, data))).await;
-        }
-        Err(e) => {
-            push_log(&state, &format!("ws/{}", action), &e, false, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
-        }
-    }
-}
-
-async fn handle_ws_backup(action: String, value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
-    let start = std::time::Instant::now();
-    let result: Result<JsonValue, String> = async {
-        match action.as_str() {
-            "backup-settings" => {
-                let store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.snapshot().map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(snap.data.settings.backup).unwrap_or_default())
-            }
-            "update-backup-settings" => {
-                let backup: crate::config::BackupSettings = serde_json::from_value(value.get("settings").cloned().unwrap_or_default()).map_err(|e| format!("参数错误: {}", e))?;
-                let mut store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.snapshot().map_err(|e| e.to_string())?;
-                let mut settings = snap.data.settings.clone();
-                settings.backup = backup.clone();
-                store.settings_update(settings).map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(backup).unwrap_or_default())
-            }
-            "backup-records" => {
-                let store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                let snap = store.snapshot().map_err(|e| e.to_string())?;
-                Ok(serde_json::to_value(snap.data.backup_records).unwrap_or_default())
-            }
-            "run-backup" => {
-                let (settings, vault_path, file_name) = {
-                    let store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                    store.ensure_unlocked().map_err(|e| e.to_string())?;
-                    let snap = store.snapshot().map_err(|e| e.to_string())?;
-                    (snap.data.settings.backup, store.vault_file_path(), crate::backup::backup_file_name())
-                };
-                let bytes = tokio::fs::read(&vault_path).await.map_err(|e| e.to_string())?;
-                let package = crate::backup::build_backup_package(bytes).await.map_err(|e| e.to_string())?;
-                let size = package.len() as u64;
-                let has_local = settings.local_directory.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false);
-                if !has_local && !settings.cloud.enabled {
-                    return Err("请先配置本地备份目录或启用云端备份".to_string());
-                }
-                let mut outcomes = Vec::new();
-                if has_local {
-                    let dir = std::path::PathBuf::from(settings.local_directory.as_deref().unwrap().trim());
-                    let target = dir.join(&file_name);
-                    match async { tokio::fs::create_dir_all(&dir).await?; tokio::fs::write(&target, &package).await?; Ok::<(), std::io::Error>(()) }.await {
-                        Ok(()) => outcomes.push(crate::config::BackupRecord::success(file_name.clone(), "local", target.to_string_lossy().to_string(), size)),
-                        Err(e) => outcomes.push(crate::config::BackupRecord::failed(file_name.clone(), "local", target.to_string_lossy().to_string(), e.to_string())),
-                    }
-                }
-                Ok(serde_json::to_value(outcomes).unwrap_or_default())
-            }
-            "delete-backup-record" => {
-                let record_id = value.get("recordId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let delete_file = value.get("deleteFile").and_then(|v| v.as_bool()).unwrap_or(false);
-                let (snap, delete_path) = {
-                    let mut store = state.vault.lock().map_err(|_| "内部锁错误".to_string())?;
-                    store.delete_backup_record(&record_id, delete_file).map_err(|e| e.to_string())?
-                };
-                if let Some(path) = delete_path { let _ = tokio::fs::remove_file(path).await; }
-                Ok(serde_json::to_value(snap.data.backup_records).unwrap_or_default())
-            }
-            _ => Err(format!("未知备份操作: {}", action)),
-        }
-    }.await;
-    let elapsed = start.elapsed().as_millis() as u64;
-    match result {
-        Ok(data) => {
-            push_log(&state, &format!("ws/{}", action), "OK", true, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::result(&id, data))).await;
-        }
-        Err(e) => {
-            push_log(&state, &format!("ws/{}", action), &e, false, elapsed).await;
-            let _ = tx.send(ws_text_frame(&WsResponse::error(&id, &e))).await;
-        }
-    }
-}
-
 fn ws_text_frame<T: Serialize>(value: &T) -> Frame {
     Frame::text(Bytes::from(serde_json::to_string(value).unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"内部序列化失败\"}".into())))
 }
@@ -528,8 +323,5 @@ struct WsResponse {
 impl WsResponse {
     fn error(id: &str, msg: &str) -> Self {
         Self { id: id.into(), r#type: "error".into(), payload: serde_json::json!({ "error": msg }) }
-    }
-    fn result<T: Serialize>(id: &str, data: T) -> Self {
-        Self { id: id.into(), r#type: "result".into(), payload: serde_json::json!({ "data": data }) }
     }
 }

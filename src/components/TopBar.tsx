@@ -5,6 +5,7 @@ import {
   DisconnectOutlined,
   EditOutlined,
   LeftOutlined,
+  LoadingOutlined,
   PlusOutlined,
   ProfileOutlined,
   RightOutlined,
@@ -28,6 +29,7 @@ interface TopBarProps {
   onDelete: (id: string) => void;
   onConnect: (session: RemoteSession) => void;
   onDisconnect: (session: RemoteSession) => void;
+  onCancelConnect: (id: string) => void;
   onTransferOpen: () => void;
   onSettingsOpen: () => void;
   connectingSessionId: string | null;
@@ -50,6 +52,7 @@ export function TopBar({
   onDelete,
   onConnect,
   onDisconnect,
+  onCancelConnect,
   onTransferOpen,
   onSettingsOpen,
   connectingSessionId,
@@ -149,6 +152,8 @@ export function TopBar({
             const state = sessionState(session, connectingSessionId);
             if (state === "connected") {
               onDisconnect(session);
+            } else if (state === "connecting") {
+              onCancelConnect(session.id);
             } else if (state === "disconnected" || state === "failed") {
               onConnect(session);
             }
@@ -244,17 +249,32 @@ export function TopBar({
                   </span>
                 </span>
                 <span className="sessionListModalActions">
-                  <Tooltip title={connected ? "断开连接" : "连接"}>
+                  <Tooltip title={connected ? "断开连接" : connecting ? "取消连接" : "连接"}>
                     <Button
-                      aria-label={connected ? `断开 ${session.name}` : `连接 ${session.name}`}
-                      icon={connected ? <DisconnectOutlined /> : <ApiOutlined />}
+                      aria-label={
+                        connected
+                          ? `断开 ${session.name}`
+                          : connecting
+                          ? `取消连接 ${session.name}`
+                          : `连接 ${session.name}`
+                      }
+                      icon={
+                        connected ? (
+                          <DisconnectOutlined />
+                        ) : connecting ? (
+                          <LoadingOutlined />
+                        ) : (
+                          <ApiOutlined />
+                        )
+                      }
                       size="small"
-                      loading={connecting}
-                      danger={connected}
+                      danger={connected || connecting}
                       onClick={(event) => {
                         event.stopPropagation();
                         if (connected) {
                           onDisconnect(session);
+                        } else if (connecting) {
+                          onCancelConnect(session.id);
                         } else {
                           openSessionFromList(session);
                         }

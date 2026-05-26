@@ -549,26 +549,35 @@ function App() {
     setSessionListOpen(true);
   }
 
+  /**
+   * 取消"连接中"会话的 SSH 握手过程，但保留 tab。
+   *
+   * 由 TopBar 中"点击活动 tab"或"API 按钮"在 connecting 状态触发。X 关闭按钮
+   * 仍然走 closeSession，cancel + 关闭 tab。
+   */
+  async function cancelConnectingSession(id: string) {
+    if (connectingSessionId !== id) return;
+    abortedConnectSessionsRef.current.add(id);
+    const pendingConnectionId = pendingConnectionIdsRef.current.get(id);
+    if (pendingConnectionId) {
+      pendingConnectionIdsRef.current.delete(id);
+      await remoteApi.disconnect(pendingConnectionId).catch(() => undefined);
+    }
+    setConnectingSessionId((current) => (current === id ? null : current));
+    updateSession(id, (item) => ({
+      ...item,
+      state: "disconnected",
+      connectionId: null,
+      terminalId: null,
+      sftpId: null,
+      telemetryJobId: null,
+    }));
+  }
+
   async function closeSession(id: string) {
     const session = sessions.find((item) => item.id === id);
     if (connectingSessionId === id) {
-      abortedConnectSessionsRef.current.add(id);
-      const pendingConnectionId = pendingConnectionIdsRef.current.get(id);
-      if (pendingConnectionId) {
-        pendingConnectionIdsRef.current.delete(id);
-        await remoteApi.disconnect(pendingConnectionId).catch(() => undefined);
-      }
-      setConnectingSessionId((current) => (current === id ? null : current));
-      if (session) {
-        updateSession(id, (item) => ({
-          ...item,
-          state: "disconnected",
-          connectionId: null,
-          terminalId: null,
-          sftpId: null,
-          telemetryJobId: null,
-        }));
-      }
+      await cancelConnectingSession(id);
     } else if (session?.connectionId) {
       await teardownSession(session);
     }
@@ -1573,6 +1582,7 @@ function App() {
                   onDelete={(id) => void deleteSession(id)}
                   onConnect={(session) => void connectSession(session)}
                   onDisconnect={(session) => void disconnectSession(session)}
+                  onCancelConnect={(id) => void cancelConnectingSession(id)}
                   onTransferOpen={() => setTransferCenterOpen(true)}
                   onSettingsOpen={() => setSettingsOpen(true)}
                   connectingSessionId={connectingSessionId}

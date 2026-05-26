@@ -215,12 +215,31 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
               </Tooltip>
             </div>
             <div className="aiApiEndpointScroll">
-              <div className="aiApiEndpointItem"><code>WS /api/ws</code> — 主通道（主鉴权）</div>
-              <div className="aiApiEndpointItem"><code>GET /api/auth</code> — 验证 API Key（探活，可选）</div>
-              <div className="aiApiEndpointItem"><code>PUT /api/upload?ticket=&amp;sessionId=&amp;remotePath=</code> — 流式上传</div>
-              <div className="aiApiEndpointItem"><code>GET /api/download?ticket=...</code> — 下载文件（支持 Range 断点续传）</div>
+              <div className="aiApiEndpointItem">
+                <code>会话</code>
+                <span>sessions · connect · disconnect</span>
+              </div>
+              <div className="aiApiEndpointItem">
+                <code>操作</code>
+                <span>exec · files</span>
+              </div>
+              <div className="aiApiEndpointItem">
+                <code>文件传输</code>
+                <span>upload · download (Range)</span>
+              </div>
+              <div className="aiApiEndpointItem">
+                <code>隧道</code>
+                <span>tunnels CRUD · start · stop</span>
+              </div>
+              <div className="aiApiEndpointItem">
+                <code>备份</code>
+                <span>settings · records · run</span>
+              </div>
+              <div className="aiApiEndpointItem">
+                <code>WS</code>
+                <span>exec(流式) · cancel · ping（高级，可选）</span>
+              </div>
             </div>
-            <p className="aiApiEndpointNote">WS 一次握手即完成鉴权，承载全部操作；上传/下载需额外凭 WS 签发的一次性 HMAC 票据访问 HTTP。</p>
           </div>
         )}
         <div className="aiApiActions">

@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use super::auth::{consume_ticket, verify_auth, verify_session_access};
-use super::{friendly_error_detail, map_remote_error, push_log, ApiError, ApiServerState, TicketPurpose};
+use super::auth::{verify_auth, verify_session_access};
+use super::guard::check_dangerous_command;
+use super::{friendly_error_detail, map_remote_error, push_log, push_log_with_response, ApiError, ApiServerState};
 
 // ─── Public types (re-exported from mod.rs) ────────────────────────────────────
 
@@ -50,8 +51,6 @@ pub(super) struct UploadResponse {
 #[serde(rename_all = "camelCase")]
 pub(super) struct UploadRawQuery {
     #[serde(default)]
-    ticket: String,
-    #[serde(default)]
     session_id: String,
     #[serde(default)]
     remote_path: String,
@@ -62,13 +61,33 @@ pub(super) struct UploadRawQuery {
 pub(super) struct DownloadQuery {
     session_id: String,
     path: String,
-    #[serde(default)]
-    ticket: String,
 }
 
-// ─── Handlers ──────────────────────────────────────────────────────────────────
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SessionIdBody {
+    session_id: String,
+}
 
-/// HTTP 鉴权验证端点。仅用于 api_key 探活——客户端可在打开 WS 之前测试 key 是否有效。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ExecBody {
+    session_id: String,
+    command: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FilesQuery {
+    session_id: String,
+    path: String,
+}
+
+// ─── Auth probe ────────────────────────────────────────────────────────────────
+
+/// 鉴权探活 + 端点目录。
 pub async fn auth_check(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
@@ -78,18 +97,324 @@ pub async fn auth_check(
     drop(key);
     Ok(Json(serde_json::json!({
         "authenticated": true,
-        "ws": "/api/ws",
-        "uploadFlow": "ws issue-ticket(purpose=upload) → PUT /api/upload?ticket=...&sessionId=...&remotePath=... ；可选 Content-Range 实现并发分块",
-        "downloadFlow": "ws issue-ticket(purpose=download) → GET /api/download?ticket=...&sessionId=...&path= (支持 Range)",
+        "auth": "Authorization: Bearer <api_key>",
+        "rest": {
+            "GET /api/sessions": "list connected sessions",
+            "POST /api/connect": "{sessionId} → ConnectionInfo",
+            "POST /api/disconnect": "{sessionId} → {success}",
+            "POST /api/exec": "{sessionId, command, timeoutMs?} → ExecResult",
+            "GET /api/files?sessionId=&path=": "list files",
+            "PUT /api/upload?sessionId=&remotePath=": "raw bytes body, → {success, remotePath, size}",
+            "GET /api/download?sessionId=&path=": "supports Range",
+            "GET /api/tunnels": "list tunnels",
+            "POST /api/tunnels": "{input} create tunnel, return list",
+            "PATCH /api/tunnels/{id}": "{input} update tunnel, return list",
+            "DELETE /api/tunnels/{id}": "delete tunnel, return list",
+            "POST /api/tunnels/{id}/start": "→ {forwardId, bindHost, bindPort}",
+            "POST /api/tunnels/{id}/stop": "→ {success}",
+            "GET /api/backup/settings": "get backup settings",
+            "PUT /api/backup/settings": "{settings} update backup settings",
+            "GET /api/backup/records": "list backup records",
+            "POST /api/backup/run": "run backup now → result array",
+            "DELETE /api/backup/records/{id}?deleteFile=true": "delete record, return list"
+        },
+        "ws": "/api/ws — exec(streaming) / cancel / ping only",
     })))
 }
 
+// ─── REST: 会话生命周期 / 命令执行 / 文件列出 ───────────────────────────────────
+
+/// `GET /api/sessions` — 列出已连接会话。
+pub async fn rest_sessions(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+) -> Result<Json<Vec<SessionItem>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    let start = std::time::Instant::now();
+    let sessions = state.remote.list_connected_sessions().await;
+    let elapsed = start.elapsed().as_millis() as u64;
+    push_log(
+        &state,
+        "rest/sessions",
+        &format!("{} 项", sessions.len()),
+        true,
+        elapsed,
+    )
+    .await;
+    Ok(Json(sessions))
+}
+
+/// `POST /api/connect` — 拉起 SSH 连接（幂等，已连接即返回当前 ConnectionInfo）。
+pub async fn rest_connect(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<SessionIdBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    if body.session_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "缺少 sessionId".into(),
+            }),
+        ));
+    }
+    verify_session_access(&state, &body.session_id)?;
+
+    let start = std::time::Instant::now();
+    // VaultStore 是 std Mutex，把同步读取局限在一个块里释放锁后再 await。
+    let bundle = {
+        let store = state
+            .vault
+            .lock()
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "内部锁错误".into() })))?;
+        crate::commands::build_session_for_connect(&store, &body.session_id).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?
+    };
+    let (session, known_host) = bundle;
+
+    match state
+        .remote
+        .api_connect_session(&state.app, session, known_host)
+        .await
+    {
+        Ok(info) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(&state, "rest/connect", &body.session_id, true, elapsed).await;
+            Ok(Json(serde_json::to_value(info).unwrap_or_default()))
+        }
+        Err(error) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            let msg = error.to_string();
+            push_log(
+                &state,
+                "rest/connect",
+                &friendly_error_detail(&format!("{} → {}", body.session_id, msg), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: msg }),
+            ))
+        }
+    }
+}
+
+/// `POST /api/disconnect` — 断开会话（按 sessionId 反查 connectionId）。
+pub async fn rest_disconnect(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<SessionIdBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    if body.session_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "缺少 sessionId".into(),
+            }),
+        ));
+    }
+    verify_session_access(&state, &body.session_id)?;
+
+    let start = std::time::Instant::now();
+    match state
+        .remote
+        .api_disconnect_session(&state.app, &body.session_id)
+        .await
+    {
+        Ok(_) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(&state, "rest/disconnect", &body.session_id, true, elapsed).await;
+            Ok(Json(serde_json::json!({ "success": true })))
+        }
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "rest/disconnect",
+                &friendly_error_detail(&format!("{} → {}", body.session_id, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: e }),
+            ))
+        }
+    }
+}
+
+/// `POST /api/exec` — 阻塞式运行命令并一次性返回 stdout/stderr/exitCode。
+///
+/// 长流式输出请改用 WS `exec`（带 `cancel` 能力）。
+pub async fn rest_exec(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Json(body): Json<ExecBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    if body.session_id.is_empty() || body.command.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "缺少 sessionId 或 command".into(),
+            }),
+        ));
+    }
+    if let Some(reason) = check_dangerous_command(&body.command) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: format!("命令被拒绝: {}", reason),
+            }),
+        ));
+    }
+    verify_session_access(&state, &body.session_id)?;
+
+    let timeout_ms = body.timeout_ms.unwrap_or(30_000);
+    let start = std::time::Instant::now();
+    let detail = if body.command.len() > 80 {
+        format!("{}...", &body.command[..77])
+    } else {
+        body.command.clone()
+    };
+
+    match state
+        .remote
+        .api_exec(&body.session_id, &body.command, timeout_ms)
+        .await
+    {
+        Ok(result) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            let success = !result.timed_out && result.exit_status.unwrap_or(1) == 0;
+            // 日志里只截一段输出当预览
+            let preview: String = {
+                let mut buf = String::new();
+                buf.push_str(&result.stdout);
+                if buf.len() > 2000 {
+                    buf.truncate(2000);
+                }
+                if buf.is_empty() {
+                    None
+                } else {
+                    Some(buf)
+                }
+                .unwrap_or_default()
+            };
+            push_log_with_response(
+                &state,
+                "rest/exec",
+                &detail,
+                success,
+                elapsed,
+                if preview.is_empty() { None } else { Some(preview) },
+            )
+            .await;
+            Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+        }
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "rest/exec",
+                &friendly_error_detail(&format!("{} → {}", body.command, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err(map_remote_error(e, &state))
+        }
+    }
+}
+
+/// `GET /api/files?sessionId=&path=` — 列出远端目录。
+pub async fn rest_files(
+    headers: HeaderMap,
+    AxumState(state): AxumState<ApiServerState>,
+    Query(query): Query<FilesQuery>,
+) -> Result<Json<Vec<FileEntry>>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
+    if query.session_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "缺少 sessionId".into(),
+            }),
+        ));
+    }
+    verify_session_access(&state, &query.session_id)?;
+
+    let start = std::time::Instant::now();
+    match state
+        .remote
+        .api_list_files(&query.session_id, &query.path)
+        .await
+    {
+        Ok(entries) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "rest/files",
+                &format!("{} ({} 项)", query.path, entries.len()),
+                true,
+                elapsed,
+            )
+            .await;
+            Ok(Json(entries))
+        }
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            push_log(
+                &state,
+                "rest/files",
+                &friendly_error_detail(&format!("{} → {}", query.path, e), &state),
+                false,
+                elapsed,
+            )
+            .await;
+            Err(map_remote_error(e, &state))
+        }
+    }
+}
+
+// ─── 文件传输（Bearer 鉴权） ──────────────────────────────────────────────────
+
 /// raw PUT 上传：流式直写 SFTP，零 temp 文件。
 pub async fn upload_file_raw(
+    headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<UploadRawQuery>,
     body: Body,
 ) -> Result<Json<UploadResponse>, (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
     if query.session_id.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 sessionId 查询参数".into() })));
     }
@@ -97,7 +422,6 @@ pub async fn upload_file_raw(
         return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 remotePath 查询参数".into() })));
     }
 
-    consume_ticket(&state, &query.ticket, TicketPurpose::Upload, &query.session_id).await?;
     verify_session_access(&state, &query.session_id)?;
 
     let start = std::time::Instant::now();
@@ -150,7 +474,10 @@ pub async fn download_file(
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<DownloadQuery>,
 ) -> Result<Response<Body>, (StatusCode, Json<ApiError>)> {
-    consume_ticket(&state, &query.ticket, TicketPurpose::Download, &query.session_id).await?;
+    let key = state.api_key.read().await;
+    verify_auth(&headers, &key)?;
+    drop(key);
+
     verify_session_access(&state, &query.session_id)?;
     let start = std::time::Instant::now();
 

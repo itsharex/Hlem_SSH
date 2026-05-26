@@ -47,6 +47,55 @@ impl Stream for OrderedChunkStream {
 const PER_WORKER_QUEUE_DEPTH: usize = 4;
 
 impl RemoteRuntime {
+    /// 由 AI API `connect-session` 调用：根据 vault 中的 SessionConfig 拉起 SSH
+    /// 主连接，连接成功后顺手开 SFTP 子系统（与 UI 行为对齐）。
+    ///
+    /// **幂等**：底层 `connect_inner` 持 session 级锁并复用已存在的连接；
+    /// SFTP 也只在该连接下还没开过的情况下才打开。重复调用是安全的。
+    ///
+    /// SFTP 打开失败不会让整个调用失败——SSH 已经连上，AI 仍然可以走 exec。
+    /// SFTP 失败会落到 log::warn，让运维侧能看到。
+    pub async fn api_connect_session(
+        &self,
+        app: &AppHandle,
+        session: SessionConfig,
+        known_host: Option<KnownHostEntry>,
+    ) -> AppResult<ConnectionInfo> {
+        let info = self.connect(app, session, known_host).await?;
+
+        let already_has_sftp = {
+            let sftp_sessions = self.sftp_sessions.read().await;
+            sftp_sessions
+                .values()
+                .any(|record| record.info.connection_id == info.connection_id)
+        };
+        if !already_has_sftp {
+            if let Err(error) = self.open_sftp(&info.connection_id).await {
+                log::warn!(
+                    "api_connect_session: SFTP 打开失败（SSH 仍连接）: {}",
+                    error
+                );
+            }
+        }
+        Ok(info)
+    }
+
+    /// 由 AI API `disconnect-session` 调用：按 session_id 反查 connection_id
+    /// 后走标准 disconnect 流程。会话本来就没连接 → 返回友好错误。
+    pub async fn api_disconnect_session(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let connection_id = match self.find_connection_by_session(session_id).await {
+            Some(record) => record.info.connection_id,
+            None => return Err(format!("会话 {} 当前未连接", session_id)),
+        };
+        self.disconnect(app, &connection_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// List all currently connected sessions with their SFTP availability.
     pub async fn list_connected_sessions(&self) -> Vec<SessionItem> {
         let connections = self.connections.read().await;
@@ -75,8 +124,7 @@ impl RemoteRuntime {
             .collect()
     }
 
-    /// Execute a command on a connected session (by session_id).
-    #[allow(dead_code)]
+    /// Execute a command on a connected session (by session_id). Used by HTTP REST `/api/exec`.
     pub async fn api_exec(
         &self,
         session_id: &str,

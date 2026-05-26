@@ -8,81 +8,119 @@ export interface ApiDocParams {
 
 export function buildApiDoc(params: ApiDocParams): string {
   const { port, apiKey, sessionId, sessionName, sessionHost } = params;
-  const wsBase = `ws://127.0.0.1:${port}`;
-  const httpBase = `http://127.0.0.1:${port}`;
   const sid = sessionId || "<sessionId>";
-  const session = sessionName
-    ? `会话: ${sessionName}${sessionHost ? ` (${sessionHost})` : ""} | ID: ${sid}`
-    : "模式: 全部会话（先发 list-sessions 获取 sessionId）";
+  const sessionLine = sessionName
+    ? `会话: ${sessionName}${sessionHost ? ` (${sessionHost})` : ""} | ID: ${sid} （下文 \`<sid>\` 替换为此 ID）`
+    : "模式: 全部会话（下文 `<sid>` 为占位，先用 GET /api/sessions 获取实际值）";
 
   return `# HelM AI API
 
-这是给 AI 客户端使用的本地控制 API。WebSocket 是主通道；上传/下载走 HTTP，但必须先通过 WebSocket 申请一次性 ticket。
+本地 SSH/SFTP 网关。**默认走 HTTP REST，curl 一行直用**；WebSocket 仅给需要边跑边收输出 / 中途取消的高级场景。
 
-## 连接与鉴权
+## 接入
 
-WS: ${wsBase}/api/ws
-Auth: Header \`Authorization: Bearer ${apiKey}\`
-Browser fallback: \`${wsBase}/api/ws?token=${apiKey}\`
-${session}
+- Base: \`http://127.0.0.1:${port}\` （下文记作 \`<base>\`）
+- Auth: header \`Authorization: Bearer ${apiKey}\`（HTTP 与 WS 统一）
+- ${sessionLine}
 
-可选探活: \`GET ${httpBase}/api/auth\`，同样使用 Bearer header。WebSocket 支持自动协商 permessage-deflate，客户端通常无需特殊处理。
+## REST 端点
 
-## WebSocket 协议
+所有端点用 \`Authorization: Bearer\` 鉴权。POST/PUT/PATCH 请求 body 为 JSON（\`Content-Type: application/json\`）。
 
-请求统一是 JSON Text frame: \`{ "id": string, "type": string, ...fields }\`
-普通结果: \`{ "id": "...", "type": "result", "data": ... }\`
-错误: \`{ "id": "...", "type": "error", "error": "..." }\`
+**会话**
+- \`GET <base>/api/sessions\` → 已连接会话数组
+- \`POST <base>/api/connect\` \`{sessionId}\` → ConnectionInfo（幂等，已连即返）
+- \`POST <base>/api/disconnect\` \`{sessionId}\` → \`{success}\`
 
-| type | fields | result |
-| --- | --- | --- |
-| ping | - | \`pong\` |
-| cancel | \`id\` 取要取消的请求 id | \`cancelled\` |
-| list-sessions | - | 会话数组 |
-| list-files | \`sessionId,path\` | 文件数组 |
-| exec | \`sessionId,command,timeoutMs?,binary?\` | 流式输出，最后 \`done\` |
-| issue-ticket | \`sessionId?,purpose:"upload"\\|"download"\` | \`ticket,purpose,expiresIn\` |
-| list-tunnels | - | 隧道数组 |
-| create-tunnel | \`input:{name,sessionId,forwardType,bindHost,bindPort,targetHost,targetPort}\` | 隧道数组 |
-| update-tunnel | \`tunnelId,input:{...}\` | 隧道数组 |
-| delete-tunnel | \`tunnelId\` | 隧道数组 |
-| start-tunnel | \`tunnelId\` | \`{forwardId,bindHost,bindPort}\` |
-| stop-tunnel | \`tunnelId\` | \`{success:true}\` |
-| backup-settings | - | 备份设置 |
-| update-backup-settings | \`settings\` | 备份设置 |
-| backup-records | - | 备份记录数组 |
-| run-backup | - | 本次备份结果数组 |
-| delete-backup-record | \`recordId,deleteFile?\` | 备份记录数组 |
+**操作**
+- \`POST <base>/api/exec\` \`{sessionId, command, timeoutMs?}\` → \`{stdout, stderr, exitStatus, durationMs, timedOut}\`
+- \`GET <base>/api/files?sessionId=&path=\` → 文件数组
 
-## 常用消息
+**文件传输**
+- \`PUT <base>/api/upload?sessionId=&remotePath=\` body 是字节流 → \`{success, remotePath, size}\`
+- \`GET <base>/api/download?sessionId=&path=\` 支持 \`Range: bytes=start-end\`，越界返回 416
 
-\`\`\`jsonc
-{ "id": "1", "type": "list-sessions" }
-{ "id": "2", "type": "list-files", "sessionId": "${sid}", "path": "/" }
-{ "id": "3", "type": "exec", "sessionId": "${sid}", "command": "uname -a", "timeoutMs": 30000 }
-{ "id": "3", "type": "stdout", "data": "Linux ...", "binary": false }
-{ "id": "3", "type": "done", "exitCode": 0, "timedOut": false, "durationMs": 37, "binary": false }
-{ "id": "4", "type": "issue-ticket", "sessionId": "${sid}", "purpose": "download" }
-{ "id": "4", "type": "ticket", "ticket": "<ticket>", "purpose": "download", "expiresIn": 60 }
+**隧道**（CRUD + start/stop）
+- \`GET <base>/api/tunnels\` → 隧道数组
+- \`POST <base>/api/tunnels\` \`{input}\` → 创建后返回隧道数组
+- \`PATCH <base>/api/tunnels/{id}\` \`{input}\` → 更新后返回隧道数组
+- \`DELETE <base>/api/tunnels/{id}\` → 删除后返回隧道数组
+- \`POST <base>/api/tunnels/{id}/start\` → \`{forwardId, bindHost, bindPort}\`
+- \`POST <base>/api/tunnels/{id}/stop\` → \`{success}\`
+
+input: \`{name, sessionId, forwardType:"local"|"remote"|"dynamic", bindHost, bindPort, targetHost, targetPort}\`
+
+**备份**
+- \`GET <base>/api/backup/settings\` → 备份设置
+- \`PUT <base>/api/backup/settings\` body: BackupSettings → 备份设置
+- \`GET <base>/api/backup/records\` → 备份记录数组
+- \`POST <base>/api/backup/run\` → 本次执行的结果数组
+- \`DELETE <base>/api/backup/records/{id}?deleteFile=true\` → 剩余记录数组
+
+## curl 速查
+
+\`\`\`bash
+KEY="${apiKey}"
+BASE="http://127.0.0.1:${port}"
+SID="${sid}"
+
+# 连接 + 跑命令
+curl -sH "Authorization: Bearer $KEY" -H content-type:application/json \\
+  -XPOST $BASE/api/connect -d "{\\"sessionId\\":\\"$SID\\"}"
+curl -sH "Authorization: Bearer $KEY" -H content-type:application/json \\
+  -XPOST $BASE/api/exec -d "{\\"sessionId\\":\\"$SID\\",\\"command\\":\\"uname -a\\"}"
+
+# 文件
+curl -sH "Authorization: Bearer $KEY" "$BASE/api/files?sessionId=$SID&path=/"
+curl -sH "Authorization: Bearer $KEY" -T ./local.tar \\
+  "$BASE/api/upload?sessionId=$SID&remotePath=/tmp/r.tar"
+curl -sH "Authorization: Bearer $KEY" -o ./out.tar \\
+  "$BASE/api/download?sessionId=$SID&path=/tmp/r.tar"
+
+# 隧道（启动一条已存在的隧道）
+curl -sH "Authorization: Bearer $KEY" $BASE/api/tunnels
+curl -sH "Authorization: Bearer $KEY" -XPOST $BASE/api/tunnels/<tunnelId>/start
+
+# 备份（立即跑一次）
+curl -sH "Authorization: Bearer $KEY" -XPOST $BASE/api/backup/run
 \`\`\`
 
-## 文件传输
+## WebSocket（仅流式 / 可取消场景）
 
-HTTP 上传/下载不接受 Authorization header，必须先走 \`issue-ticket\`。ticket 一次性、60 秒过期，并绑定 purpose 与 sessionId；每个 HTTP 请求都要新 ticket。
+如果只是跑普通命令，**忽略本节**。用 REST 即可。
 
-Upload: \`PUT ${httpBase}/api/upload?ticket=<ticket>&sessionId=${sid}&remotePath=/tmp/foo\`
-Body: 文件原始字节流。成功返回 \`{success,remotePath,size}\`。
+WS endpoint: \`ws://127.0.0.1:${port}/api/ws\`，握手时带同一个 \`Authorization: Bearer\` header。请求 \`{id, type, ...}\`，响应共享 id。
 
-Download: \`GET ${httpBase}/api/download?ticket=<ticket>&sessionId=${sid}&path=/tmp/foo\`
-支持 \`Range: bytes=start-end\`，成功返回文件字节；Range 越界返回 416。
+WS 只保留三个命令：
+
+- \`exec {sessionId, command, timeoutMs?, binary?}\` → 流式 \`stdout\` / \`stderr\` 帧 + \`done {exitCode, timedOut, durationMs}\`
+- \`cancel {id}\` 中止指定 id 的进行中任务
+- \`ping\` → \`pong\`
+
+适合 WS 而不是 REST 的场景：
+- 想边跑边收 stdout（如 \`tail -f\`、长时间编译输出）
+- 中途要 \`cancel\` 进行中的任务
+- 单连接复用降低开销
+
+\`binary=true\` 时输出走 Binary frame（默认 false 即可，二进制场景才需要，详见 \`api_server/ws.rs\` 帧头说明）。
 
 ## 规则
 
-- 默认 sessionId: ${sid}
-- \`exec.timeoutMs\` 默认 30000；超时通常返回 \`exitCode=124,timedOut=true\`
-- \`exec.binary=false\`: stdout/stderr 走 JSON Text frame，字段为 \`data\`
-- \`exec.binary=true\`: stdout/stderr 走 Binary frame，格式 \`[u8 stream][u8 id_len][id_bytes][payload]\`，stream 0=stdout、1=stderr；最后仍有 JSON \`done\`
-- error 包含"未连接"时，提示用户在 HelM 手动连接，不要自动重试
-- 危险命令（rm -rf /usr、shutdown 等）被拒绝
-- 服务只监听本机 \`127.0.0.1\`，不要把 API Key 暴露给不可信页面`;
+- 操作前先 \`POST /api/connect\`（幂等）。错误中含"未连接"时先调它再重试。它顺手开 SFTP，无需额外步骤。
+- 未知主机密钥不会自动信任，\`/api/connect\` 会直接报错，由用户在 HelM 主窗口确认指纹。
+- \`exec\` 默认 30s 超时；超时返回 \`exitStatus=124\` 加 \`timedOut=true\`。
+- 危险命令（\`rm -rf /\`、\`shutdown\` 等）一律被拒绝，不要尝试规避。
+
+按状态码分流：
+
+| 状态码 | 含义 | AI 应做 |
+| --- | --- | --- |
+| 200 / 206 | 成功 | 解析 body |
+| 400 | 参数缺失或非法 | 检查请求字段 |
+| 401 | API key 无效 | 不重试，停手 |
+| 403 | 危险命令 / 无权访问该会话 | 不重试，换命令或换会话 |
+| 404 | 资源不存在（如未知 tunnelId） | 检查 ID |
+| 416 | Range 越界 | 调整 Range 重试 |
+| 503 | 目标会话未连接 | 先 \`POST /api/connect\` 再重试 |
+| 500 | 远端 / 内部错误 | 把 \`error\` 字段展示给用户 |`;
 }

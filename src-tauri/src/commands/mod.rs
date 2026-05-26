@@ -164,13 +164,25 @@ fn session_bundle(
     state: &State<'_, AppState>,
     session_id: &str,
 ) -> AppResult<(SessionConfig, Option<KnownHostEntry>)> {
-    with_store(state, |store| {
-        let mut session = store.session(session_id)?;
-        let known_host = store.known_host(&session.host, session.port)?;
-        let settings = store.snapshot()?.data.settings;
-        apply_global_proxy(&mut session, &settings);
-        Ok((session, known_host))
-    })
+    with_store(state, |store| build_session_for_connect(store, session_id))
+}
+
+/// Resolve a session's full connection bundle from a vault store: SessionConfig
+/// (with the global proxy already applied) plus any matching known-host entry.
+///
+/// Exposed `pub(crate)` so the AI API server can reuse the exact same logic
+/// when its `connect-session` command brings a session online without UI
+/// interaction. Keeping this in `commands::` ensures both call sites observe
+/// identical proxy / known-host semantics.
+pub(crate) fn build_session_for_connect(
+    store: &VaultStore,
+    session_id: &str,
+) -> AppResult<(SessionConfig, Option<KnownHostEntry>)> {
+    let mut session = store.session(session_id)?;
+    let known_host = store.known_host(&session.host, session.port)?;
+    let settings = store.snapshot()?.data.settings;
+    apply_global_proxy(&mut session, &settings);
+    Ok((session, known_host))
 }
 
 fn apply_global_proxy(session: &mut SessionConfig, settings: &AppSettings) {

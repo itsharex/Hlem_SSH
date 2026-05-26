@@ -1,18 +1,17 @@
 mod auth;
 mod guard;
+mod handlers_admin;
 mod handlers_remote;
 mod ws;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use axum::{
     extract::DefaultBodyLimit,
     http::{header, HeaderValue, Method, StatusCode},
     response::Json,
-    routing::{any, get, put},
+    routing::{any, delete, get, patch, post, put},
     Router,
 };
 use chrono::Utc;
@@ -37,35 +36,8 @@ pub use handlers_remote::{FileEntry, SessionItem};
 const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
 const MAX_LOG_ENTRIES: usize = 100;
 const LOG_FLUSH_DEBOUNCE: Duration = Duration::from_secs(1);
-/// Ticket 有效期（秒）。客户端从 WS 拿到 ticket 后须在该窗口内发起 HTTP 请求。
-pub(self) const TICKET_TTL: Duration = Duration::from_secs(60);
-/// Ticket 清理任务运行间隔。
-const TICKET_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 // ─── Public types ──────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(self) enum TicketPurpose {
-    Upload,
-    Download,
-}
-
-impl TicketPurpose {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Upload => "upload",
-            Self::Download => "download",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "upload" => Some(Self::Upload),
-            "download" => Some(Self::Download),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct ApiServerState {
@@ -79,9 +51,6 @@ pub struct ApiServerState {
     #[allow(dead_code)]
     pub log_file: PathBuf,
     pub log_dirty: Arc<Notify>,
-    /// 已消费的 ticket nonce → 过期时刻。用于一次性票据的防重放保护。
-    /// HMAC 无状态票据本身不在服务端存储；只保留"已用过"的 nonce 即可。
-    pub(self) consumed_nonces: Arc<RwLock<HashMap<String, Instant>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,7 +160,6 @@ pub async fn start_server(
     let existing_logs = load_logs_from_file(&log_file);
     let logs = Arc::new(RwLock::new(existing_logs));
     let log_dirty = Arc::new(Notify::new());
-    let consumed_nonces = Arc::new(RwLock::new(HashMap::<String, Instant>::new()));
     let state = ApiServerState {
         api_key: Arc::new(RwLock::new(api_key.clone())),
         app: app.clone(),
@@ -202,7 +170,6 @@ pub async fn start_server(
         logs: logs.clone(),
         log_file: log_file.clone(),
         log_dirty: log_dirty.clone(),
-        consumed_nonces: consumed_nonces.clone(),
     };
 
     let cors = CorsLayer::new()
@@ -213,17 +180,42 @@ pub async fn start_server(
             let host = host_with_port.split('/').next().unwrap_or("").split(':').next().unwrap_or("");
             matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
         }))
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     let app_router = Router::new()
-        // HTTP 仅保留：鉴权验证 + 文件上传/下载（二进制流不适合 WS）+ WS 升级
+        // 鉴权探活
         .route("/api/auth", get(handlers_remote::auth_check))
-        // raw PUT：query 带 sessionId / remotePath / ticket，body 是文件原始字节，
-        // 服务端流式直写 SFTP，无 temp 文件、无 multipart 解析。
-        // 可选 Content-Range 头实现并发分块上传（每片自带 ticket + Range，互不阻塞）。
+        // ─── REST：会话生命周期 + 命令执行 + 文件列表 ──────────────────────────
+        .route("/api/sessions", get(handlers_remote::rest_sessions))
+        .route("/api/connect", post(handlers_remote::rest_connect))
+        .route("/api/disconnect", post(handlers_remote::rest_disconnect))
+        .route("/api/exec", post(handlers_remote::rest_exec))
+        .route("/api/files", get(handlers_remote::rest_files))
+        // ─── REST：隧道管理（CRUD + start/stop） ───────────────────────────────
+        .route(
+            "/api/tunnels",
+            get(handlers_admin::rest_tunnels_list).post(handlers_admin::rest_tunnels_create),
+        )
+        .route(
+            "/api/tunnels/{tunnel_id}",
+            patch(handlers_admin::rest_tunnels_update).delete(handlers_admin::rest_tunnels_delete),
+        )
+        .route("/api/tunnels/{tunnel_id}/start", post(handlers_admin::rest_tunnels_start))
+        .route("/api/tunnels/{tunnel_id}/stop", post(handlers_admin::rest_tunnels_stop))
+        // ─── REST：备份管理 ────────────────────────────────────────────────────
+        .route(
+            "/api/backup/settings",
+            get(handlers_admin::rest_backup_settings_get).put(handlers_admin::rest_backup_settings_update),
+        )
+        .route("/api/backup/records", get(handlers_admin::rest_backup_records_list))
+        .route("/api/backup/records/{record_id}", delete(handlers_admin::rest_backup_record_delete))
+        .route("/api/backup/run", post(handlers_admin::rest_backup_run))
+        // ─── 文件传输（Bearer 鉴权 + 流式） ────────────────────────────────────
+        // PUT body 是文件原始字节，服务端流式直写 SFTP，无 temp 文件。
         .route("/api/upload", put(handlers_remote::upload_file_raw))
         .route("/api/download", get(handlers_remote::download_file))
+        // ─── WS 升级（仅流式 exec / cancel 用） ────────────────────────────────
         .route("/api/ws", any(ws::ws_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY))
         .layer(cors)
@@ -236,29 +228,6 @@ pub async fn start_server(
     let actual_port = listener.local_addr().map_err(|e| format!("获取端口失败: {}", e))?.port();
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-
-    // Background nonce cleaner: 周期性扫描过期的"已消费 nonce"并移除，避免内存泄漏。
-    // 由于 ticket TTL 60s，最坏情况下集合大小 = TICKET_CLEANUP_INTERVAL 内的消费速率。
-    {
-        let nonces_for_cleaner = consumed_nonces.clone();
-        let mut cleaner_shutdown = shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(TICKET_CLEANUP_INTERVAL);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let now = Instant::now();
-                        let mut map = nonces_for_cleaner.write().await;
-                        map.retain(|_, expires_at| *expires_at > now);
-                    }
-                    _ = cleaner_shutdown.changed() => {
-                        if *cleaner_shutdown.borrow_and_update() { break; }
-                    }
-                }
-            }
-        });
-    }
 
     // Background log flusher
     {
