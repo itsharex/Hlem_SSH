@@ -28,10 +28,7 @@ struct TelemetryStream {
 impl TelemetryStream {
     /// Open a fresh exec channel on `handle` and start the remote loop.
     async fn open(handle: &SshHandle) -> AppResult<Self> {
-        let channel = {
-            let h = handle.lock().await;
-            h.channel_open_session().await.map_err(remote_error)?
-        };
+        let channel = open_session_channel(handle).await?;
         let (mut read_half, write_half) = channel.split();
         write_half
             .exec(true, TELEMETRY_LOOP_COMMAND)
@@ -369,7 +366,7 @@ impl RemoteRuntime {
         record.handle.abort();
         Ok(())
     }
-    pub(super) async fn telemetry_stop_by_session(&self, session_id: &str) {
+    pub(super) async fn telemetry_stop_by_session(&self, session_id: &str) -> usize {
         let job_ids: Vec<String> = self
             .telemetry_jobs
             .read()
@@ -378,11 +375,14 @@ impl RemoteRuntime {
             .filter_map(|(id, record)| (record.info.session_id == session_id).then(|| id.clone()))
             .collect();
         let mut jobs = self.telemetry_jobs.write().await;
+        let mut stopped = 0usize;
         for id in job_ids {
             if let Some(record) = jobs.remove(&id) {
                 record.handle.abort();
+                stopped += 1;
             }
         }
+        stopped
     }
     pub(super) async fn cancel_telemetry_for_session(
         &self,

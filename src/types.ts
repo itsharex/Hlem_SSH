@@ -21,6 +21,7 @@ export interface TerminalEntry {
   id: string;
   kind: "system" | "input" | "output" | "error";
   content: string;
+  dataBase64?: string;
   timestamp: string;
 }
 

@@ -8,20 +8,17 @@ import { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { remoteApi } from "../api/remoteApi";
 import { appApi } from "../api/appApi";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
-import type { RemoteSession, TerminalEntry, TerminalOutputEvent } from "../types";
+import type { RemoteSession, TerminalEntry } from "../types";
 
 interface TerminalPanelProps {
   session: RemoteSession;
   inputHistory: InputHistoryEntry[];
   onSendData: (data: string) => void;
-  onSendCommand: (command: string) => void;
   onResize: (cols: number, rows: number) => void;
   onClear: () => void;
   onReopenTerminal?: () => void;
-  onReconnect?: () => void;
   onInputHistoryChange: (history: InputHistoryEntry[]) => void;
 }
 
@@ -37,7 +34,7 @@ type InputHistoryEntry = {
 
 const INPUT_HISTORY_LIMIT = 15;
 
-export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onSendCommand, onResize, onClear, onReopenTerminal, onReconnect, onInputHistoryChange }: TerminalPanelProps) {
+export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onResize, onClear, onReopenTerminal, onInputHistoryChange }: TerminalPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; selectedText: string } | null>(null);
   const [actionFlash, setActionFlash] = useState<"paste" | "copyAll" | "clear" | "history" | null>(null);
   const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => mergeInputHistory(loadInputHistory(), inputHistoryProp));
@@ -50,21 +47,23 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
   const terminalRef = useRef<XtermTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const appliedRef = useRef<AppliedTerminalState | null>(null);
-  const lastSizeRef = useRef({ cols: 0, rows: 0 });
+  const lastSizeRef = useRef<{ terminalId: string | null; cols: number; rows: number }>({ terminalId: null, cols: 0, rows: 0 });
+  const terminalIdRef = useRef<string | null>(session.terminalId ?? null);
   const sendDataRef = useRef(onSendData);
-  const sendCommandRef = useRef(onSendCommand);
   const resizeRef = useRef(onResize);
   const clearRef = useRef(onClear);
   const flashTimerRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const pendingInputEchoRef = useRef("");
   const historyDraftRef = useRef("");
   const historyCursorRef = useRef<number | null>(null);
   const inputHistoryRef = useRef<InputHistoryEntry[]>(inputHistory);
+  const inputValueRef = useRef(inputValue);
   const connected = session.state === "connected";
   const connectedRef = useRef(connected);
 
   inputHistoryRef.current = inputHistory;
+  inputValueRef.current = inputValue;
+  terminalIdRef.current = session.terminalId ?? null;
 
   useEffect(() => {
     onInputHistoryChangeRef.current = onInputHistoryChange;
@@ -81,10 +80,6 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
   }, [onSendData]);
 
   useEffect(() => {
-    sendCommandRef.current = onSendCommand;
-  }, [onSendCommand]);
-
-  useEffect(() => {
     resizeRef.current = onResize;
   }, [onResize]);
 
@@ -96,12 +91,31 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     connectedRef.current = connected;
   }, [connected]);
 
+  function fitAndResizeTerminal() {
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    try {
+      fitAddon.fit();
+    } catch {
+      return;
+    }
+    const { cols, rows } = terminal;
+    const terminalId = terminalIdRef.current;
+    if (!terminalId || cols <= 0 || rows <= 0) return;
+    const last = lastSizeRef.current;
+    if (cols !== last.cols || rows !== last.rows || terminalId !== last.terminalId) {
+      lastSizeRef.current = { terminalId, cols, rows };
+      resizeRef.current(cols, rows);
+    }
+  }
+
   useEffect(() => {
     setInputHistory(mergeInputHistory(loadInputHistory(), inputHistoryProp));
     setHistoryOpen(false);
     historyDraftRef.current = "";
     historyCursorRef.current = null;
-    pendingInputEchoRef.current = "";
+    inputValueRef.current = "";
     setInputValue("");
     setInputScrollLeft(0);
   }, [session.id]);
@@ -179,32 +193,18 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     });
     const dataDisposable = terminal.onData((data) => {
       if (!connectedRef.current) return;
-      trackInputEcho(data);
       sendDataRef.current(data);
     });
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    const fitAndResize = () => {
-      try {
-        fitAddon.fit();
-      } catch {
-        return;
-      }
-      const { cols, rows } = terminal;
-      if (cols > 0 && rows > 0 && (cols !== lastSizeRef.current.cols || rows !== lastSizeRef.current.rows)) {
-        lastSizeRef.current = { cols, rows };
-        resizeRef.current(cols, rows);
-      }
-    };
-
     const resizeObserver = new ResizeObserver(() => {
-      window.requestAnimationFrame(fitAndResize);
+      window.requestAnimationFrame(fitAndResizeTerminal);
     });
     resizeObserver.observe(host);
     window.requestAnimationFrame(() => {
-      fitAndResize();
+      fitAndResizeTerminal();
       terminal.focus();
     });
 
@@ -219,6 +219,11 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
   }, []);
 
   useEffect(() => {
+    if (!session.terminalId) return;
+    window.requestAnimationFrame(fitAndResizeTerminal);
+  }, [session.terminalId]);
+
+  useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
 
@@ -226,7 +231,6 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     if (appliedRef.current?.sessionKey !== sessionKey) {
       terminal.reset();
       appliedRef.current = { sessionKey, offsets: new Map() };
-      pendingInputEchoRef.current = "";
     }
 
     const applied = appliedRef.current;
@@ -239,37 +243,23 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     }
 
     for (const entry of session.terminal) {
-      if (entry.kind === "output") continue;
       const content = terminalEntryData(entry);
+      const contentLength = terminalEntryDataLength(content);
       const previousLength = applied.offsets.get(entry.id) ?? 0;
-      if (previousLength < content.length) {
-        const nextContent = content.slice(previousLength);
-        terminal.write(nextContent);
-        applied.offsets.set(entry.id, content.length);
+      if (previousLength < contentLength) {
+        const nextContent = sliceTerminalEntryData(content, previousLength);
+        const shouldClearForFreshTui = shouldClearForFreshInteractiveFrame(nextContent);
+        const shouldStickToBottom = shouldClearForFreshTui || isTerminalAtBottom(terminal) || shouldFollowTerminalOutput(nextContent);
+        if (shouldClearForFreshTui) {
+          terminal.write(TERMINAL_VIEW_CLEAR_SEQUENCE);
+        }
+        terminal.write(nextContent, () => {
+          if (shouldStickToBottom) terminal.scrollToBottom();
+        });
+        applied.offsets.set(entry.id, contentLength);
       }
     }
   }, [session.id, session.terminalId, session.terminal]);
-
-  useEffect(() => {
-    const terminalId = session.terminalId;
-    if (!terminalId) return;
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-    void remoteApi.onTerminalOutput((payload) => {
-      if (disposed || payload.terminalId !== terminalId) return;
-      writeLiveTerminalPayload(payload);
-    }).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      cleanup = unlisten;
-    });
-    return () => {
-      disposed = true;
-      cleanup?.();
-    };
-  }, [session.terminalId]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -314,7 +304,6 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     if (!connectedRef.current) return;
     const text = await readClipboardText();
     if (text) {
-      trackInputEcho(text);
       sendDataRef.current(text);
     }
     terminalRef.current?.focus();
@@ -359,28 +348,29 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
 
   function submitInput() {
     if (!connectedRef.current) return;
-    const value = inputValue;
-    if (value.length === 0) return;
-    // Ctrl+U 清空 shell 当前输入行，再发完整命令和回车，保证 shell 显示的命令与本地输入框一致
-    const data = `\x15${value}\r`;
-    trackInputEcho(data);
-    sendDataRef.current(data);
+    sendInputCommand(inputValueRef.current);
+  }
+
+  function sendInputCommand(value: string) {
+    const command = value;
+    if (!command.trim()) return;
+    // Ctrl+U 清空 shell 当前输入行，再发完整命令和回车，避免和远端 readline 的历史状态互相缠住。
+    sendDataRef.current(`\x15${command}\r`);
     setInputHistory((prev) => {
       const next = [
-        ...prev.filter((entry) => entry.command !== value),
-        { command: value, timestamp: Date.now() },
+        ...prev.filter((entry) => entry.command !== command),
+        { command, timestamp: Date.now() },
       ].slice(-INPUT_HISTORY_LIMIT);
       saveInputHistory(next);
       onInputHistoryChangeRef.current(next);
       return next;
     });
-    setInputValue("");
-    setInputScrollLeft(0);
-    historyCursorRef.current = null;
-    historyDraftRef.current = "";
+    resetHistoryNavigation();
+    setInputText("");
   }
 
   function setInputText(value: string) {
+    inputValueRef.current = value;
     setInputValue(value);
     const end = value.length;
     window.requestAnimationFrame(() => {
@@ -395,13 +385,37 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     });
   }
 
-  /**
-   * 将本地输入框的当前文本镜像到 SSH shell：先 Ctrl+U 清空 shell 行，再写入新内容。
-   * 这样用户按上/下键切换历史时，shell 提示符后会同步显示当前命令。
-   */
-  function mirrorToShell(_value: string) {
-    // Disabled: mirroring to shell while browsing history causes prompt corruption.
-    // The shell will receive the final command on Enter via submitInput().
+  function resetHistoryNavigation() {
+    historyCursorRef.current = null;
+    historyDraftRef.current = "";
+  }
+
+  function navigateInputHistory(direction: -1 | 1) {
+    const history = inputHistoryRef.current;
+    if (history.length === 0) return;
+
+    const cursor = historyCursorRef.current;
+    if (direction < 0) {
+      const nextCursor = cursor === null ? history.length - 1 : Math.max(0, cursor - 1);
+      if (cursor === null) historyDraftRef.current = inputValueRef.current;
+      historyCursorRef.current = nextCursor;
+      setInputText(history[nextCursor].command);
+      setHistoryOpen(false);
+      return;
+    }
+
+    if (cursor === null) return;
+    const nextCursor = cursor + 1;
+    if (nextCursor >= history.length) {
+      historyCursorRef.current = null;
+      const draft = historyDraftRef.current;
+      historyDraftRef.current = "";
+      setInputText(draft);
+      return;
+    }
+    historyCursorRef.current = nextCursor;
+    setInputText(history[nextCursor].command);
+    setHistoryOpen(false);
   }
 
   function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
@@ -410,111 +424,28 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
       submitInput();
       return;
     }
+    if ((event.key === "ArrowUp" || event.key === "ArrowDown") && inputHistoryRef.current.length > 0) {
+      event.preventDefault();
+      navigateInputHistory(event.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
-      setInputValue("");
-      setInputScrollLeft(0);
-      historyCursorRef.current = null;
-      historyDraftRef.current = "";
-      mirrorToShell("");
+      resetHistoryNavigation();
+      setInputText("");
       terminalRef.current?.focus();
     }
   }
 
   function applyHistoryEntry(entry: string) {
-    setInputHistory((prev) => {
-      const next = [
-        ...prev.filter((item) => item.command !== entry),
-        { command: entry, timestamp: Date.now() },
-      ].slice(-INPUT_HISTORY_LIMIT);
-      saveInputHistory(next);
-      onInputHistoryChangeRef.current(next);
-      return next;
-    });
     if (connectedRef.current) {
-      sendCommandRef.current(entry);
-      setInputText("");
+      sendInputCommand(entry);
     } else {
       setInputText(entry);
+      resetHistoryNavigation();
     }
-    historyCursorRef.current = null;
-    historyDraftRef.current = "";
     setHistoryOpen(false);
     window.requestAnimationFrame(() => terminalRef.current?.focus());
-  }
-
-  function writeLiveTerminalPayload(payload: TerminalOutputEvent) {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    if (payload.kind === "system") {
-      terminal.write(`\r\n\x1b[2m${new Date().toLocaleTimeString("zh-CN", { hour12: false })}\x1b[0m \x1b[36m${payload.data}\x1b[0m\r\n`);
-      return;
-    }
-    terminal.write(terminalPayloadBytes(payload));
-  }
-
-  function terminalPayloadBytes(payload: TerminalOutputEvent) {
-    if (!payload.dataBase64) return payload.data;
-    const binary = window.atob(payload.dataBase64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-  }
-
-  function trackInputEcho(data: string) {
-    let next = pendingInputEchoRef.current;
-    for (let index = 0; index < data.length; index += 1) {
-      const char = data[index];
-      if (char === "\x1b") {
-        index = skipAnsiSequence(data, index);
-        continue;
-      }
-      if (char === "\b" || char === "\x7f") {
-        next = Array.from(next).slice(0, -1).join("");
-        continue;
-      }
-      if (char === "\r" || char === "\n" || char < " ") continue;
-      next += char;
-    }
-    pendingInputEchoRef.current = next.length > 2000 ? next.slice(-2000) : next;
-  }
-
-  function colorPendingInputEcho(data: string) {
-    let pending = pendingInputEchoRef.current;
-    if (!pending) return data;
-    let output = "";
-    let index = 0;
-    while (index < data.length) {
-      const char = data[index];
-      if (char === "\x1b") {
-        const end = skipAnsiSequence(data, index);
-        output += data.slice(index, end + 1);
-        index = end + 1;
-        continue;
-      }
-      if (pending && isEchoPrintableChar(char) && char === pending[0]) {
-        let matched = "";
-        while (
-          index < data.length &&
-          pending &&
-          data[index] !== "\x1b" &&
-          isEchoPrintableChar(data[index]) &&
-          data[index] === pending[0]
-        ) {
-          matched += data[index];
-          pending = pending.slice(1);
-          index += 1;
-        }
-        output += terminalInputColor(matched);
-        continue;
-      }
-      output += char;
-      index += 1;
-    }
-    pendingInputEchoRef.current = pending;
-    return output;
   }
 
   function deleteHistoryEntry(index: number) {
@@ -552,6 +483,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     [inputHistory],
   );
   const hoveredHistoryEntry = hoveredHistoryIndex === null ? null : inputHistory[hoveredHistoryIndex] ?? null;
+  const commandHighlight = useMemo(() => renderCommandHighlight(inputValue), [inputValue]);
   const historyPreview = historyOpen && hoveredHistoryEntry ? (
     <div className="terminalHistoryPreviewPanel" aria-hidden="true">
       <pre className="terminalHistoryPreviewCommand">{renderCommandHighlight(hoveredHistoryEntry.command)}</pre>
@@ -598,24 +530,6 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
             </span>
           </div>
         ) : null}
-        {!connected && (session.state === "disconnected" || session.state === "failed") && onReconnect ? (
-          <div className="terminalReopenOverlay">
-            <Button
-              type="primary"
-              icon={<ReloadOutlined />}
-              size="middle"
-              onClick={(event) => {
-                event.stopPropagation();
-                onReconnect();
-              }}
-            >
-              重新连接
-            </Button>
-            <span className="terminalReopenHint">
-              {session.state === "failed" ? "上次连接失败，点击重试" : "连接已断开，点击重新建立 SSH 连接"}
-            </span>
-          </div>
-        ) : null}
         {!connected && session.state === "connecting" ? (
           <div className="terminalReopenOverlay">
             <span className="terminalReopenHint">正在连接...</span>
@@ -639,7 +553,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
         <div className={`terminalCommandInputWrap${connected ? "" : " terminalCommandInputWrap-disabled"}`}>
           <div className="terminalCommandHighlightViewport" aria-hidden="true">
             <pre className="terminalCommandHighlight" style={{ transform: `translateX(-${inputScrollLeft}px)` }}>
-              {renderCommandHighlight(inputValue)}
+              {commandHighlight}
             </pre>
           </div>
           <input
@@ -654,11 +568,20 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
             disabled={!connected}
             value={inputValue}
             onChange={(event) => {
-              if (historyCursorRef.current !== null) historyCursorRef.current = null;
-              setInputValue(event.currentTarget.value);
-              setInputScrollLeft(event.currentTarget.scrollLeft);
+              // 必须在闭包外把值固化下来：updater 是延后执行的，
+              // 等到 React 调度它时事件已经分发完毕，event.currentTarget 会被
+              // 浏览器置为 null，再去取属性会抛 TypeError 把整棵 React 树打白。
+              const nextValue = event.currentTarget.value;
+              const nextScrollLeft = event.currentTarget.scrollLeft;
+              resetHistoryNavigation();
+              inputValueRef.current = nextValue;
+              setInputValue(nextValue);
+              setInputScrollLeft((current) => (current === nextScrollLeft ? current : nextScrollLeft));
             }}
-            onScroll={(event) => setInputScrollLeft(event.currentTarget.scrollLeft)}
+            onScroll={(event) => {
+              const nextScrollLeft = event.currentTarget.scrollLeft;
+              setInputScrollLeft((current) => (current === nextScrollLeft ? current : nextScrollLeft));
+            }}
             onKeyDown={handleInputKeyDown}
           />
         </div>
@@ -775,79 +698,15 @@ function isInlineAssignment(token: string) {
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
 
-function colorTerminalResponse(data: string) {
-  return data
-    .split(/(\r\n|\n|\r)/)
-    .map((part) => {
-      if (part === "\r\n" || part === "\n" || part === "\r") return part;
-      if (!part.trim() || hasAnsiOrUnsafeControl(part)) return part;
-      return colorResponseLine(colorPromptPrefix(part));
-    })
-    .join("");
-}
-
-function colorPromptPrefix(line: string) {
-  return line.replace(/^([\w.-]+)@([\w.-]+):([^\r\n#$>]*)([#$>])(\s?)/, (_, user: string, host: string, cwd: string, sign: string, space: string) => {
-    const userColor = user === "root" ? "31;1" : "32;1";
-    return `${ansiColor(user, userColor)}@${ansiColor(host, "36;1")}:${ansiColor(cwd, "34;1")}${ansiColor(sign, "33;1")}${space}`;
-  });
-}
-
-function colorResponseLine(line: string) {
-  const pattern =
-    /(---[^-\r\n]+statistics ---)|\b((?:\d{1,3}\.){3}\d{1,3})\b|\b(icmp_seq|ttl|time)=([^\s]+)|\b(0%\s+packet\s+loss|connected|success|received|transmitted)\b|\b(error|failed|denied|refused|timeout|timed\s+out|unreachable|packet\s+loss)\b|\b(\d+(?:\.\d+)?)(\s?)(ms|s|bytes|packets?|%)(?=\b)/gi;
-  return line.replace(
-    pattern,
-    (
-      match,
-      heading: string | undefined,
-      ip: string | undefined,
-      metricKey: string | undefined,
-      metricValue: string | undefined,
-      success: string | undefined,
-      error: string | undefined,
-      numberValue: string | undefined,
-      numberSpace: string | undefined,
-      numberUnit: string | undefined,
-    ) => {
-      if (heading) return ansiColor(heading, "36;1");
-      if (ip) return ansiColor(ip, "36");
-      if (metricKey && metricValue) return `${ansiColor(metricKey, "35")}=${ansiColor(metricValue, "33")}`;
-      if (success) return ansiColor(success, "32");
-      if (error) return ansiColor(error, "31");
-      if (numberValue && numberUnit) return `${ansiColor(numberValue, "33")}${numberSpace ?? ""}${ansiColor(numberUnit, "90")}`;
-      return match;
-    },
-  );
-}
-
-function ansiColor(value: string, color: string) {
-  return `\x1b[${color}m${value}\x1b[39;22m`;
-}
-
 function hasAnsiOrUnsafeControl(value: string) {
   return /[\x1b\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 }
 
-function terminalInputColor(value: string) {
-  return `\x1b[38;2;5;150;105m${value}\x1b[39m`;
-}
+type TerminalWriteData = string | Uint8Array;
+const TERMINAL_VIEW_CLEAR_SEQUENCE = "\x1b[3J\x1b[H\x1b[2J";
 
-function isEchoPrintableChar(char: string) {
-  return char >= " " && char !== "\x7f";
-}
-
-function skipAnsiSequence(value: string, start: number) {
-  let index = start + 1;
-  if (value[index] === "[") {
-    index += 1;
-    while (index < value.length && !/[A-Za-z~]/.test(value[index])) index += 1;
-    return Math.min(index, value.length - 1);
-  }
-  return Math.min(index, value.length - 1);
-}
-
-function terminalEntryData(entry: TerminalEntry) {
+function terminalEntryData(entry: TerminalEntry): TerminalWriteData {
+  if (entry.dataBase64) return decodeBase64Bytes(entry.dataBase64);
   if (entry.kind === "system") {
     return `\r\n\x1b[2m${entry.timestamp}\x1b[0m \x1b[36m${entry.content}\x1b[0m\r\n`;
   }
@@ -858,6 +717,69 @@ function terminalEntryData(entry: TerminalEntry) {
     return `\x1b[31m${entry.content}\x1b[0m\r\n`;
   }
   return entry.content;
+}
+
+function decodeBase64Bytes(value: string) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function terminalEntryDataLength(value: TerminalWriteData) {
+  return typeof value === "string" ? value.length : value.length;
+}
+
+function sliceTerminalEntryData(value: TerminalWriteData, start: number): TerminalWriteData {
+  return typeof value === "string" ? value.slice(start) : value.slice(start);
+}
+
+function isTerminalAtBottom(terminal: XtermTerminal) {
+  const buffer = terminal.buffer.active;
+  return buffer.viewportY >= Math.max(0, buffer.baseY - 1);
+}
+
+function shouldFollowTerminalOutput(value: TerminalWriteData) {
+  const text = terminalWriteDataText(value);
+  return hasFullScreenTerminalControl(text) || hasInteractiveTerminalMarker(text) || /\r(?!\n)/.test(text);
+}
+
+function shouldClearForFreshInteractiveFrame(value: TerminalWriteData) {
+  const text = terminalWriteDataText(value);
+  if (!text) return false;
+  if (hasAlternateScreenEnter(text)) return true;
+  return hasFreshScreenDraw(text) && hasInteractiveTerminalMarker(text);
+}
+
+function terminalWriteDataText(value: TerminalWriteData) {
+  if (typeof value === "string") return value;
+  try {
+    return new TextDecoder().decode(value);
+  } catch {
+    return "";
+  }
+}
+
+function hasAlternateScreenEnter(text: string) {
+  return /\x1b\[\?(?:47|1047|1049)h/.test(text);
+}
+
+function hasFreshScreenDraw(text: string) {
+  return /\x1b\[(?:H|1;1H|0;0H)/.test(text) && /\x1b\[(?:J|0J|2J|3J)/.test(text);
+}
+
+function hasFullScreenTerminalControl(text: string) {
+  return hasAlternateScreenEnter(text) || hasFreshScreenDraw(text) || /\x1b\[\d+;\d+[Hf]/.test(text);
+}
+
+function hasInteractiveTerminalMarker(text: string) {
+  return (
+    /Package configuration|Configuring [^\r\n]+|<\s*(?:Ok|OK|Yes|No|Cancel|Back)\s*>/.test(text) ||
+    /[┌┐└┘─│╭╮╰╯═║╔╗╚╝]/.test(text) ||
+    /\x1b\(0/.test(text)
+  );
 }
 
 function hasTerminalControl(content: string) {

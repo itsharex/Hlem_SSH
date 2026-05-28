@@ -50,7 +50,8 @@ export type FileOperation =
   | { kind: "rename"; sourcePath: string; targetPath: string }
   | { kind: "copy"; sourcePath: string; targetPath: string }
   | { kind: "move"; sourcePath: string; targetPath: string }
-  | { kind: "delete"; sourcePath: string };
+  | { kind: "delete"; sourcePath: string }
+  | { kind: "deleteMany"; sourcePaths: string[] };
 
 type ContextMenuState = { entry: RemoteFileEntry; x: number; y: number };
 
@@ -700,11 +701,9 @@ export function FileManager({
         okText: "删除",
         okButtonProps: { danger: true },
         cancelText: "取消",
-        onOk: async () => {
-          const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
-          await onSendCommand(`rm -rf ${quoted}`);
+        onOk: () => {
+          startBackgroundOperation({ kind: "deleteMany", sourcePaths: paths });
           setSelectedRowKeys([]);
-          refresh();
         },
       });
     }

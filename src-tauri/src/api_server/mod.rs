@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     net::TcpListener,
     sync::{watch, Notify, RwLock},
-    time::Duration,
+    task::JoinHandle,
+    time::{timeout, Duration},
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -36,6 +37,7 @@ pub use handlers_remote::{FileEntry, SessionItem};
 const MAX_UPLOAD_BODY: usize = 512 * 1024 * 1024;
 const MAX_LOG_ENTRIES: usize = 100;
 const LOG_FLUSH_DEBOUNCE: Duration = Duration::from_secs(1);
+const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -75,6 +77,7 @@ pub struct ApiServerInfo {
 
 pub struct ApiServerHandle {
     shutdown_tx: watch::Sender<bool>,
+    server_task: JoinHandle<()>,
     pub port: u16,
     pub api_key: String,
     pub allowed_session_id: Option<String>,
@@ -84,8 +87,17 @@ pub struct ApiServerHandle {
 }
 
 impl ApiServerHandle {
-    pub fn stop(&self) {
+    pub fn is_finished(&self) -> bool {
+        self.server_task.is_finished()
+    }
+
+    pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
+        let mut server_task = self.server_task;
+        if timeout(SERVER_SHUTDOWN_TIMEOUT, &mut server_task).await.is_err() {
+            server_task.abort();
+            let _ = server_task.await;
+        }
     }
 }
 
@@ -143,6 +155,22 @@ pub(self) fn friendly_error_detail(detail: &str, state: &ApiServerState) -> Stri
     } else {
         detail.to_string()
     }
+}
+
+pub(self) fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+pub(self) fn take_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 // ─── Server startup ────────────────────────────────────────────────────────────
@@ -259,7 +287,7 @@ pub async fn start_server(
         });
     }
 
-    tokio::spawn(async move {
+    let server_task = tokio::spawn(async move {
         axum::serve(listener, app_router)
             .with_graceful_shutdown(async move {
                 while !*shutdown_rx.borrow_and_update() {
@@ -272,6 +300,7 @@ pub async fn start_server(
 
     Ok(ApiServerHandle {
         shutdown_tx,
+        server_task,
         port: actual_port,
         api_key,
         allowed_session_id,

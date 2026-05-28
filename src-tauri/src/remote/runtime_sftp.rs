@@ -4,7 +4,10 @@ impl RemoteRuntime {
     pub async fn open_sftp(&self, connection_id: &str) -> AppResult<SftpInfo> {
         let connection = self.connection(connection_id).await?;
         // Open only 1 SFTP channel immediately for fast startup
-        let sftp = Arc::new(open_sftp_channel(&connection).await?);
+        let channel = self
+            .open_session_channel_for_connection(&connection, true)
+            .await?;
+        let sftp = Arc::new(open_sftp_channel_from_channel(channel).await?);
         let info = SftpInfo {
             sftp_id: Uuid::new_v4().to_string(),
             connection_id: connection_id.to_string(),
@@ -308,10 +311,11 @@ impl RemoteRuntime {
 }
 
 async fn open_sftp_channel(connection: &ConnectionRecord) -> AppResult<SftpSession> {
-    let channel = {
-        let handle = connection.handle.lock().await;
-        handle.channel_open_session().await.map_err(remote_error)?
-    };
+    let channel = open_session_channel(&connection.handle).await?;
+    open_sftp_channel_from_channel(channel).await
+}
+
+async fn open_sftp_channel_from_channel(channel: Channel<client::Msg>) -> AppResult<SftpSession> {
     channel
         .request_subsystem(true, "sftp")
         .await

@@ -13,7 +13,10 @@ use tokio_util::io::{ReaderStream, StreamReader};
 
 use super::auth::{verify_auth, verify_session_access};
 use super::guard::check_dangerous_command;
-use super::{friendly_error_detail, map_remote_error, push_log, push_log_with_response, ApiError, ApiServerState};
+use super::{
+    friendly_error_detail, map_remote_error, push_log, push_log_with_response, take_chars, truncate_for_log, ApiError,
+    ApiServerState,
+};
 
 // ─── Public types (re-exported from mod.rs) ────────────────────────────────────
 
@@ -295,11 +298,7 @@ pub async fn rest_exec(
 
     let timeout_ms = body.timeout_ms.unwrap_or(30_000);
     let start = std::time::Instant::now();
-    let detail = if body.command.len() > 80 {
-        format!("{}...", &body.command[..77])
-    } else {
-        body.command.clone()
-    };
+    let detail = truncate_for_log(&body.command, 77);
 
     match state
         .remote
@@ -313,9 +312,7 @@ pub async fn rest_exec(
             let preview: String = {
                 let mut buf = String::new();
                 buf.push_str(&result.stdout);
-                if buf.len() > 2000 {
-                    buf.truncate(2000);
-                }
+                buf = take_chars(&buf, 2000);
                 if buf.is_empty() {
                     None
                 } else {

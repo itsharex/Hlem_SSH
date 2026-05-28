@@ -59,6 +59,64 @@ impl RemoteRuntime {
             .cloned()
             .ok_or_else(|| AppError::missing_sftp(sftp_id))
     }
+
+    pub(super) async fn open_session_channel_for_connection(
+        &self,
+        connection: &ConnectionRecord,
+        reclaim_telemetry: bool,
+    ) -> AppResult<Channel<client::Msg>> {
+        match open_session_channel(&connection.handle).await {
+            Ok(channel) => return Ok(channel),
+            Err(first_error) => {
+                if self
+                    .compact_sftp_transfer_pool_for_connection(&connection.info.connection_id)
+                    .await
+                    > 0
+                {
+                    if let Ok(channel) = open_session_channel(&connection.handle).await {
+                        return Ok(channel);
+                    }
+                }
+
+                if reclaim_telemetry
+                    && self
+                        .telemetry_stop_by_session(&connection.info.session_id)
+                        .await
+                        > 0
+                {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if let Ok(channel) = open_session_channel(&connection.handle).await {
+                        return Ok(channel);
+                    }
+                }
+
+                Err(first_error)
+            }
+        }
+    }
+
+    async fn compact_sftp_transfer_pool_for_connection(&self, connection_id: &str) -> usize {
+        let records: Vec<SftpRecord> = self
+            .sftp_sessions
+            .read()
+            .await
+            .values()
+            .filter(|record| record.info.connection_id == connection_id)
+            .cloned()
+            .collect();
+
+        let mut released = 0usize;
+        for record in records {
+            let mut sessions = record.transfer_sessions.write().await;
+            let keep = usize::from(!sessions.is_empty());
+            if sessions.len() > keep {
+                released += sessions.len() - keep;
+                sessions.truncate(keep);
+            }
+        }
+        released
+    }
+
     pub(super) async fn close_children_for_connection(
         &self,
         app: &AppHandle,

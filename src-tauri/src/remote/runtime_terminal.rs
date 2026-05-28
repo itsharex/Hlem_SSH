@@ -1,30 +1,16 @@
 use super::*;
 
-/// 周期性 PTY keepalive 间隔。bash 的 TMOUT 计时器在 stdin 上 select()，
-/// 任何字节到达都会重置；常见 TMOUT 设置 ≥60s，所以 30s 一次的 NUL 注入
-/// 留足了余量。
-const TERMINAL_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-
-/// xterm "alternate screen" 切换序列。vim/less/top/htop/man 等全屏程序进入
-/// 时发 `\x1b[?1049h`，退出时发 `\x1b[?1049l`；老版本可能用 47 / 1047。
-const ALT_SCREEN_ENTER: &[&[u8]] = &[b"\x1b[?1049h", b"\x1b[?1047h", b"\x1b[?47h"];
-const ALT_SCREEN_LEAVE: &[&[u8]] = &[b"\x1b[?1049l", b"\x1b[?1047l", b"\x1b[?47l"];
-
-fn update_alt_screen_state(data: &[u8], in_alt_screen: &AtomicBool) {
-    // 简单线性扫描；每个输出 chunk 上 O(n*k)，k 是 6 个模式，单字节比较，
-    // 实际开销可忽略。跨 chunk 边界的极少数情况会漏一次，但全屏程序通常
-    // 会重复发送（如 vim 重绘）所以状态最终一致。
-    for pat in ALT_SCREEN_ENTER {
-        if data.windows(pat.len()).any(|w| w == *pat) {
-            in_alt_screen.store(true, Ordering::Relaxed);
-        }
-    }
-    for pat in ALT_SCREEN_LEAVE {
-        if data.windows(pat.len()).any(|w| w == *pat) {
-            in_alt_screen.store(false, Ordering::Relaxed);
-        }
-    }
-}
+const CWD_TRACKING_HOOK: &str = concat!(
+    "export HELM_CWD_HOOK=1; ",
+    "__helm_emit_cwd() { printf '\\033]777;cwd=%s\\a' \"$PWD\"; }; ",
+    "if [ -n \"${BASH_VERSION:-}\" ]; then ",
+    "case \";${PROMPT_COMMAND:-};\" in *\";__helm_emit_cwd;\"*) : ;; ",
+    "*) PROMPT_COMMAND=\"__helm_emit_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}\" ;; esac; ",
+    "elif [ -n \"${ZSH_VERSION:-}\" ]; then ",
+    "autoload -Uz add-zsh-hook >/dev/null 2>&1; ",
+    "add-zsh-hook precmd __helm_emit_cwd >/dev/null 2>&1; ",
+    "fi; __helm_emit_cwd # HELM_CWD_HOOK\n",
+);
 
 impl RemoteRuntime {
     pub async fn open_terminal(
@@ -35,10 +21,9 @@ impl RemoteRuntime {
         rows: u16,
     ) -> AppResult<TerminalInfo> {
         let connection = self.connection(connection_id).await?;
-        let channel = {
-            let handle = connection.handle.lock().await;
-            handle.channel_open_session().await.map_err(remote_error)?
-        };
+        let channel = self
+            .open_session_channel_for_connection(&connection, true)
+            .await?;
         let (mut read_half, write_half) = channel.split();
         write_half
             .request_pty(true, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
@@ -52,7 +37,6 @@ impl RemoteRuntime {
             crate::errors::register_resource_label(&terminal_id, &label);
         }
         let writer = Arc::new(Mutex::new(write_half));
-        let in_alt_screen = Arc::new(AtomicBool::new(false));
         let info = TerminalInfo {
             terminal_id: terminal_id.clone(),
             connection_id: connection_id.to_string(),
@@ -62,8 +46,8 @@ impl RemoteRuntime {
         };
 
         // 尝试通过 SSH 协议层把 TMOUT 置空（zero echo，shell 启动前生效）。
-        // 多数 sshd 因 AcceptEnv 白名单会拒绝，失败静默忽略 —— 真正兜底的是
-        // 后面 spawn 的 PTY keepalive 任务。
+        // 多数 sshd 因 AcceptEnv 白名单会拒绝，失败静默忽略；不要再向 PTY
+        // 注入隐藏字节保活，否则某些 shell/readline 会把 NUL 显示成 @ 或 ^@。
         {
             let writer = writer.lock().await;
             let _ = writer.set_env(false, "TMOUT", "").await;
@@ -76,6 +60,7 @@ impl RemoteRuntime {
             let writer = writer.lock().await;
             writer.request_shell(true).await.map_err(remote_error)?;
         }
+        install_cwd_tracking_hook(writer.clone()).await;
 
         self.terminals.write().await.insert(
             terminal_id.clone(),
@@ -91,12 +76,10 @@ impl RemoteRuntime {
         let reader_connection_id = connection_id.to_string();
         let reader_handle = connection.handle.clone();
         let reader_runtime = self.clone();
-        let reader_alt_screen = in_alt_screen.clone();
         tokio::spawn(async move {
             while let Some(message) = read_half.wait().await {
                 match message {
                     ChannelMsg::Data { data } => {
-                        update_alt_screen_state(&data, &reader_alt_screen);
                         emit_terminal_output(&app_handle, &closed_terminal_id, "output", &data)
                     }
                     ChannelMsg::ExtendedData { data, .. } => {
@@ -128,7 +111,7 @@ impl RemoteRuntime {
 
             // 终端 reader 退出后，判断 SSH handle 是否也已经死亡（被 russh 内部
             // 的 keepalive_max 机制标记关闭）。如果是，主动清理整个连接并发
-            // Disconnected 事件，前端就能显示"重新连接"按钮。
+            // Disconnected 事件，让前端状态回到已断开。
             // 仅当 shell 正常退出（如用户 `exit`）时 handle 仍存活，此时只清
             // 理终端，不动连接。
             let ssh_dead = match reader_handle.try_lock() {
@@ -152,45 +135,6 @@ impl RemoteRuntime {
                 }
             }
         });
-
-        // PTY keepalive：周期性向 PTY 注入 NUL 字节 (\x00) 重置远端 bash 的
-        // TMOUT 计时器。TMOUT 在 read() 上用 select() 实现，任何字节到达都
-        // 会重置等待；bash readline 收到 NUL 时默认绑定到 set-mark，对用户
-        // 不可见、不进入命令缓冲、不进 history。
-        //
-        // 当终端进入"备用屏幕"（vim/less/top/htop/man 等）时暂停注入，避免
-        // 干扰这些程序的输入流（例如 vim insert 模式的 Ctrl-@ 行为）。
-        {
-            let keepalive_terminal_id = terminal_id.clone();
-            let keepalive_writer = writer.clone();
-            let keepalive_terminals = self.terminals.clone();
-            let keepalive_alt_screen = in_alt_screen.clone();
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(TERMINAL_KEEPALIVE_INTERVAL);
-                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                // 跳过第一次立即触发的 tick，避免 shell 还在启动期就注入。
-                ticker.tick().await;
-                loop {
-                    ticker.tick().await;
-                    if !keepalive_terminals
-                        .read()
-                        .await
-                        .contains_key(&keepalive_terminal_id)
-                    {
-                        break;
-                    }
-                    if keepalive_alt_screen.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let writer = keepalive_writer.lock().await;
-                    let mut stream = writer.make_writer();
-                    if stream.write_all(b"\x00").await.is_err() {
-                        break;
-                    }
-                    let _ = stream.flush().await;
-                }
-            });
-        }
 
         Ok(info)
     }
@@ -250,11 +194,21 @@ impl RemoteRuntime {
         timeout_ms: Option<u64>,
     ) -> AppResult<ExecResult> {
         let connection = self.connection(connection_id).await?;
-        exec_with_handle(
-            &connection.handle,
+        let channel = self
+            .open_session_channel_for_connection(&connection, true)
+            .await?;
+        exec_with_channel(
+            channel,
             command,
             timeout_ms.unwrap_or(DEFAULT_EXEC_TIMEOUT_MS),
         )
         .await
     }
+}
+
+async fn install_cwd_tracking_hook(writer: Arc<Mutex<TerminalWriter>>) {
+    let writer = writer.lock().await;
+    let mut stream = writer.make_writer();
+    let _ = stream.write_all(CWD_TRACKING_HOOK.as_bytes()).await;
+    let _ = stream.flush().await;
 }

@@ -14,6 +14,13 @@ pub async fn api_server_start(
 ) -> AppResult<ApiServerInfo> {
     ensure_vault_unlocked(&state)?;
     let mut handle_guard = state.api_server.lock().await;
+    if handle_guard.as_ref().map(|handle| handle.is_finished()).unwrap_or(false) {
+        if let Some(handle) = handle_guard.take() {
+            drop(handle_guard);
+            handle.shutdown().await;
+            handle_guard = state.api_server.lock().await;
+        }
+    }
     if let Some(existing) = handle_guard.as_ref() {
         return Ok(ApiServerInfo {
             running: true,
@@ -72,16 +79,30 @@ pub async fn api_server_start(
 
 #[tauri::command]
 pub async fn api_server_stop(state: State<'_, AppState>) -> AppResult<()> {
-    let mut handle_guard = state.api_server.lock().await;
-    if let Some(handle) = handle_guard.take() {
-        handle.stop();
+    let handle = {
+        let mut handle_guard = state.api_server.lock().await;
+        handle_guard.take()
+    };
+    if let Some(handle) = handle {
+        handle.shutdown().await;
     }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn api_server_status(state: State<'_, AppState>) -> AppResult<ApiServerInfo> {
-    let handle_guard = state.api_server.lock().await;
+    let mut handle_guard = state.api_server.lock().await;
+    if handle_guard.as_ref().map(|handle| handle.is_finished()).unwrap_or(false) {
+        if let Some(handle) = handle_guard.take() {
+            drop(handle_guard);
+            handle.shutdown().await;
+            return Ok(ApiServerInfo {
+                running: false,
+                port: 0,
+                api_key: String::new(),
+            });
+        }
+    }
     match handle_guard.as_ref() {
         Some(handle) => Ok(ApiServerInfo {
             running: true,
@@ -110,13 +131,16 @@ pub async fn api_server_regenerate_key(
         store.settings_update(settings)?;
         Ok(())
     })?;
-    let mut handle_guard = state.api_server.lock().await;
-    if let Some(handle) = handle_guard.take() {
+    let handle = {
+        let mut handle_guard = state.api_server.lock().await;
+        handle_guard.take()
+    };
+    if let Some(handle) = handle {
         let port = handle.port;
         let allowed = handle.allowed_session_id.clone();
         let allowed_name = handle.allowed_session_name.clone();
         let log_file = handle.log_file.clone();
-        handle.stop();
+        handle.shutdown().await;
         let server_handle = api_server::start_server(
             app,
             state.remote.clone(),
@@ -134,6 +158,7 @@ pub async fn api_server_regenerate_key(
             port: server_handle.port,
             api_key: server_handle.api_key.clone(),
         };
+        let mut handle_guard = state.api_server.lock().await;
         *handle_guard = Some(server_handle);
         Ok(info)
     } else {

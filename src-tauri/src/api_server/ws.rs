@@ -24,7 +24,7 @@ use yawc::{
 use crate::remote::ExecStreamChunk;
 
 use super::guard::check_dangerous_command;
-use super::{friendly_error_detail, push_log, push_log_with_response, ApiServerState};
+use super::{friendly_error_detail, push_log, push_log_with_response, take_chars, truncate_for_log, ApiServerState};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct WsTokenQuery {
@@ -165,13 +165,36 @@ async fn handle_request(
             return;
         }
         "cancel" => {
+            if id.is_empty() {
+                let _ = tx.send(ws_text_frame(&WsResponse::error("", "cancel 请求缺少 id"))).await;
+                return;
+            }
             if let Some(handle) = jobs.write().await.remove(&id) {
                 handle.abort();
                 let _ = tx.send(ws_text_frame(&WsResponse { id, r#type: "cancelled".into(), payload: serde_json::json!({}) })).await;
+            } else {
+                let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "没有找到可取消的任务"))).await;
             }
             return;
         }
-        _ => {}
+        "exec" => {}
+        other => {
+            let _ = tx
+                .send(ws_text_frame(&WsResponse::error(
+                    &id,
+                    &format!(
+                        "未知请求类型: {}（WS 仅保留 exec / cancel / ping，其它请用 HTTP REST）",
+                        other
+                    ),
+                )))
+                .await;
+            return;
+        }
+    }
+
+    if id.is_empty() {
+        let _ = tx.send(ws_text_frame(&WsResponse::error("", "exec 请求缺少 id"))).await;
+        return;
     }
 
     let job_id = id.clone();
@@ -179,29 +202,20 @@ async fn handle_request(
     let tx_for_job = tx.clone();
     let state_for_job = state.clone();
     let value_for_job = value.clone();
-    let req_type_for_job = req_type.clone();
+
+    let mut jobs_guard = jobs.write().await;
+    if jobs_guard.contains_key(&id) {
+        drop(jobs_guard);
+        let _ = tx.send(ws_text_frame(&WsResponse::error(&id, "该 id 已有进行中的任务"))).await;
+        return;
+    }
 
     let handle = tokio::spawn(async move {
-        match req_type_for_job.as_str() {
-            "exec" => handle_ws_exec(value_for_job, job_id.clone(), tx_for_job, state_for_job).await,
-            other => {
-                let _ = tx_for_job
-                    .send(ws_text_frame(&WsResponse::error(
-                        &job_id,
-                        &format!(
-                            "未知请求类型: {}（WS 仅保留 exec / cancel / ping，其它请用 HTTP REST）",
-                            other
-                        ),
-                    )))
-                    .await;
-            }
-        }
+        handle_ws_exec(value_for_job, job_id.clone(), tx_for_job, state_for_job).await;
         jobs_for_cleanup.write().await.remove(&job_id);
     });
 
-    if !id.is_empty() {
-        jobs.write().await.insert(id, handle);
-    }
+    jobs_guard.insert(id, handle);
 }
 
 async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, state: ApiServerState) {
@@ -245,13 +259,9 @@ async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, s
                     String::from_utf8_lossy(&bytes).into_owned()
                 };
                 let mut buf = collected_for_pump.write().await;
-                if buf.len() < 2000 {
-                    let remaining = 2000 - buf.len();
-                    if preview.len() <= remaining {
-                        buf.push_str(&preview);
-                    } else {
-                        buf.push_str(&preview[..remaining]);
-                    }
+                let current_len = buf.chars().count();
+                if current_len < 2000 {
+                    buf.push_str(&take_chars(&preview, 2000 - current_len));
                 }
             }
 
@@ -285,7 +295,7 @@ async fn handle_ws_exec(value: JsonValue, id: String, tx: mpsc::Sender<Frame>, s
     });
 
     let started = std::time::Instant::now();
-    let detail = if command.len() > 80 { format!("{}...", &command[..77]) } else { command.clone() };
+    let detail = truncate_for_log(&command, 77);
     let result = state.remote.api_exec_stream(&session_id, command.clone(), timeout_ms, chunk_tx).await;
     let elapsed = started.elapsed().as_millis() as u64;
     let _ = pump.await;

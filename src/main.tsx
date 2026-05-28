@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "antd/dist/reset.css";
 import "./styles.css";
 import App from "./App";
+import { ErrorBoundary } from "./components/shared/ErrorBoundary";
 
 const isEditorWindow = new URLSearchParams(window.location.search).has("editorWindow");
 const isLogWindow = new URLSearchParams(window.location.search).has("logWindow");
@@ -26,15 +27,17 @@ function BootFallback() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  isLogWindow ? (
-    <Suspense fallback={<BootFallback />}>
-      <LogWindowApp />
-    </Suspense>
-  ) : isEditorWindow ? (
-    <Suspense fallback={<BootFallback />}>
-      <EditorWindowApp />
-    </Suspense>
-  ) : (
-    <App />
-  ),
+  <ErrorBoundary>
+    {isLogWindow ? (
+      <Suspense fallback={<BootFallback />}>
+        <LogWindowApp />
+      </Suspense>
+    ) : isEditorWindow ? (
+      <Suspense fallback={<BootFallback />}>
+        <EditorWindowApp />
+      </Suspense>
+    ) : (
+      <App />
+    )}
+  </ErrorBoundary>,
 );

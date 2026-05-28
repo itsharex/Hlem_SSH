@@ -16,9 +16,12 @@ import type {
 } from "../types";
 
 const CWD_TRACKING_ECHO_FRAGMENTS = [
-  "HELM_CWD_HOOK=1",
+  "HELM_CWD_HOOK",
   "__helm_emit_cwd",
-  "777;cwd=%s",
+  "777;cwd",
+  "PROMPT_COMMAND",
+  "add-zsh-hook precmd",
+  "precmd_functions",
 ];
 
 export function sessionConfigToInput(config: SessionConfig): SessionInput {
@@ -47,6 +50,7 @@ export function createNextSessionName(sessions: SessionConfig[], excludeId?: str
 
 export function shouldSkipTerminalEntry(entries: TerminalEntry[], entry: TerminalEntry) {
   const last = entries[entries.length - 1];
+  if (entry.kind === "output") return false;
   return Boolean(last && last.kind === entry.kind && last.content === entry.content);
 }
 
@@ -100,7 +104,7 @@ function backupFrequencyMs(frequency: BackupSettings["frequency"]) {
 function appendTerminalStreamEntry(entries: TerminalEntry[], entry: TerminalEntry) {
   if (shouldSkipTerminalEntry(entries, entry)) return entries;
   const last = entries[entries.length - 1];
-  if (last && entry.kind === "output" && last.kind === entry.kind) {
+  if (last && entry.kind === "output" && last.kind === entry.kind && !last.dataBase64 && !entry.dataBase64) {
     return [
       ...entries.slice(0, -1),
       {
@@ -126,7 +130,7 @@ export function stripCwdMarkers(data: string) {
   });
   const withoutCommandEcho = withoutMarkers
     .split(/(\r?\n)/)
-    .filter((chunk) => !CWD_TRACKING_ECHO_FRAGMENTS.every((fragment) => chunk.includes(fragment)))
+    .filter((chunk) => !CWD_TRACKING_ECHO_FRAGMENTS.some((fragment) => chunk.includes(fragment)))
     .join("");
   return { data: withoutCommandEcho, cwd, markerSeen };
 }

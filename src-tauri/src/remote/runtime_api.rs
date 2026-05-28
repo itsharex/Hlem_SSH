@@ -151,7 +151,11 @@ impl RemoteRuntime {
             .connection(&connection_id)
             .await
             .map_err(|e| e.to_string())?;
-        super::ssh::exec_stream_with_handle(&connection.handle, command, timeout_ms, chunks)
+        let channel = self
+            .open_session_channel_for_connection(&connection, true)
+            .await
+            .map_err(|e| e.to_string())?;
+        super::ssh::exec_stream_with_channel(channel, command, timeout_ms, chunks)
             .await
             .map_err(|e| e.to_string())
     }

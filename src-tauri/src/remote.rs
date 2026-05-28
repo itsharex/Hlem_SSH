@@ -68,8 +68,8 @@ const TELEMETRY_DISK_MIN_INTERVAL_MS: u64 = 60_000;
 const TELEMETRY_IP_MIN_INTERVAL_MS: u64 = 600_000;
 const TELEMETRY_FAST_TIMEOUT_MS: u64 = 8_000;
 const TELEMETRY_SLOW_TIMEOUT_MS: u64 = 12_000;
-const MAX_SFTP_TRANSFER_CONCURRENCY: usize = 12;
-const SFTP_TRANSFER_POOL_SIZE: usize = 6;
+const MAX_SFTP_TRANSFER_CONCURRENCY: usize = 4;
+const SFTP_TRANSFER_POOL_SIZE: usize = 2;
 const SFTP_OWNER_LOOKUP_TIMEOUT_MS: u64 = 1_500;
 const MAX_SFTP_SEARCH_CONCURRENCY: usize = 12;
 const MAX_SFTP_SEARCH_DIRS: usize = 800;
@@ -84,9 +84,9 @@ const TRANSFER_PROGRESS_MIN_BYTES: u64 = 1024 * 1024;
 /// 用以绕开 russh-sftp 单 File 串行 read 的瓶颈（每个 handle 自带 in-flight READ）。
 /// UI 拖拽下载和 AI API 下载共用同一阈值。
 pub(crate) const PARALLEL_DOWNLOAD_THRESHOLD: u64 = 32 * 1024 * 1024;
-/// 并行下载并发度。保守取 4，足够撬开多数高 RTT 链路的空闲带宽，
-/// 也不会把 SFTP 通道打爆。UI 拖拽下载和 AI API 下载共用。
-pub(crate) const PARALLEL_DOWNLOAD_PARTS: u64 = 4;
+/// 并行下载并发度。保守取 2，尽量兼顾吞吐与常见 VPS 的 MaxSessions 限制。
+/// UI 拖拽下载和 AI API 下载共用。
+pub(crate) const PARALLEL_DOWNLOAD_PARTS: u64 = 2;
 const TELEMETRY_BASE_COMMAND: &str = r#"sh -lc 'export LC_ALL=C;
 if read -r up _ < /proc/uptime 2>/dev/null; then printf "UPTIME %.0f\n" "$up"; fi;
 mem_total=0; mem_free=0; buffers=0; cached=0; sreclaimable=0; shmem=0; swap_total=0; swap_free=0;

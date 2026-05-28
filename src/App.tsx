@@ -464,13 +464,17 @@ function App() {
     }
   }
 
-  function applySnapshot(snapshot: ConfigSnapshot, preferredSessionId?: string) {
+  function applySnapshot(snapshot: ConfigSnapshot, preferredSessionId?: string, preserveRuntime = true) {
     const mappedSessions = snapshot.data.sessions.map(configToRemoteSession);
     const mappedIds = mappedSessions.map((session) => session.id);
     const preferredId = preferredSessionId && mappedIds.includes(preferredSessionId) ? preferredSessionId : "";
     configSnapshotRef.current = snapshot;
     setConfigSnapshot(snapshot);
-    setSessions(mappedSessions);
+    if (preserveRuntime) {
+      setSessions((current) => mergeSnapshotSessions(mappedSessions, current));
+    } else {
+      setSessions(mappedSessions);
+    }
     setOpenSessionIds((current) => {
       const validIds = current.filter((id) => mappedIds.includes(id));
       if (preferredId && !validIds.includes(preferredId)) validIds.push(preferredId);
@@ -479,6 +483,26 @@ function App() {
     setActiveSessionId((current) => (preferredId || (mappedIds.includes(current) ? current : "")));
     setAppReady(true);
     preloadWorkspaceComponents();
+  }
+
+  function mergeSnapshotSessions(nextSessions: RemoteSession[], currentSessions: RemoteSession[]) {
+    const currentById = new Map(currentSessions.map((session) => [session.id, session]));
+    return nextSessions.map((next) => {
+      const current = currentById.get(next.id);
+      if (!current || current.state === "disconnected") return next;
+      return {
+        ...next,
+        state: current.state,
+        currentPath: current.currentPath,
+        connectionId: current.connectionId,
+        terminalId: current.terminalId,
+        sftpId: current.sftpId,
+        telemetryJobId: current.telemetryJobId,
+        terminal: current.terminal,
+        telemetry: current.telemetry,
+        files: current.files,
+      };
+    });
   }
 
   function applyConfigSnapshot(snapshot: ConfigSnapshot) {
@@ -510,7 +534,9 @@ function App() {
   async function deleteSession(id: string) {
     // 如果该会话正在连接中或已连接，先关闭
     const session = sessions.find((s) => s.id === id);
-    if (session?.connectionId) {
+    if (connectingSessionId === id) {
+      await cancelConnectingSession(id);
+    } else if (session?.connectionId) {
       await teardownSession(session).catch(() => undefined);
     }
     // 从打开的 tab 中移除
@@ -953,6 +979,15 @@ function App() {
     const { data, cwd } = stripCwdMarkers(payload.data);
     const promptCwd = extractTerminalPromptCwd(payload.terminalId, data);
     if (cwd || promptCwd) updateTerminalCwd(payload.terminalId, cwd ?? promptCwd ?? "");
+    if (!data) return;
+    enqueueTerminalOutput(payload.terminalId, createTerminalOutputEntry(payload, data));
+  }
+
+  function createTerminalOutputEntry(payload: TerminalOutputEvent, content: string): TerminalEntry {
+    return {
+      ...createTerminalEntry(payload.kind, content),
+      dataBase64: content === payload.data ? payload.dataBase64 : undefined,
+    };
   }
 
   function extractTerminalPromptCwd(terminalId: string, data: string) {
@@ -1200,19 +1235,20 @@ function App() {
     }
   }
 
-  async function sendTerminalData(data: string) {
-    if (!activeSession?.terminalId) return;
+  async function sendTerminalData(sessionId: string, terminalId: string | null | undefined, data: string) {
+    if (!terminalId) return;
     try {
-      await remoteApi.writeTerminal(activeSession.terminalId, data);
+      await remoteApi.writeTerminal(terminalId, data);
     } catch (error) {
-      appendTerminal(activeSession.id, "error", formatSessionError(error, activeSession));
+      const session = sessionsRef.current.find((item) => item.id === sessionId);
+      appendTerminal(sessionId, "error", session ? formatSessionError(error, session) : getErrorMessage(error));
     }
   }
 
-  async function sendTerminalCommand(command: string) {
+  async function sendTerminalCommand(sessionId: string, terminalId: string | null | undefined, command: string) {
     const trimmed = command.trim();
     if (!trimmed) return;
-    await sendTerminalData(`${trimmed}\r`);
+    await sendTerminalData(sessionId, terminalId, `${trimmed}\r`);
   }
 
   async function resizeTerminal(terminalId: string | null | undefined, cols: number, rows: number) {
@@ -1224,9 +1260,8 @@ function App() {
     }
   }
 
-  function clearActiveTerminal() {
-    if (!activeSession) return;
-    updateSession(activeSession.id, (session) => ({ ...session, terminal: [] }));
+  function clearTerminal(sessionId: string) {
+    updateSession(sessionId, (session) => ({ ...session, terminal: [] }));
   }
 
   async function reopenTerminal(session: RemoteSession) {
@@ -1339,6 +1374,14 @@ function App() {
       case "delete":
         if (normalizeRemotePath(operation.sourcePath) === "/") throw new Error("不能删除根目录");
         await remoteApi.delete(sftpId, operation.sourcePath, true);
+        break;
+      case "deleteMany":
+        for (const sourcePath of operation.sourcePaths) {
+          if (normalizeRemotePath(sourcePath) === "/") throw new Error("不能删除根目录");
+        }
+        for (const sourcePath of operation.sourcePaths) {
+          await remoteApi.delete(sftpId, sourcePath, true);
+        }
         break;
     }
     const latestSession = sessionsRef.current.find((item) => item.id === session.id);
@@ -1544,7 +1587,7 @@ function App() {
       setForwards([]);
       setFileLoadingSessionIds(new Set());
       setConnectingSessionId(null);
-      applySnapshot(snapshot);
+      applySnapshot(snapshot, undefined, false);
       setBackupOpen(false);
     } finally {
       setBackupBusy(false);
@@ -1688,12 +1731,10 @@ function App() {
                                 <TerminalPanel
                                   session={sess}
                                   inputHistory={currentSettings.terminalInputHistory ?? []}
-                                  onSendData={(data) => void sendTerminalData(data)}
-                                  onSendCommand={(command) => void sendTerminalCommand(command)}
+                                  onSendData={(data) => void sendTerminalData(sess.id, sess.terminalId, data)}
                                   onResize={(cols, rows) => void resizeTerminal(sess.terminalId, cols, rows)}
-                                  onClear={clearActiveTerminal}
+                                  onClear={() => clearTerminal(sess.id)}
                                   onReopenTerminal={() => void reopenTerminal(sess)}
-                                  onReconnect={() => void connectSession(sess)}
                                   onInputHistoryChange={saveTerminalInputHistory}
                                 />
                               </div>
@@ -1713,7 +1754,7 @@ function App() {
                             onDownloadFiles={downloadRemoteFiles}
                             onReadText={readRemoteText}
                             onWriteText={writeRemoteText}
-                            onSendCommand={sendTerminalCommand}
+                            onSendCommand={(command) => sendTerminalCommand(activeSession.id, activeSession.terminalId, command)}
                             quickCommands={currentSettings.quickCommands ?? []}
                             onQuickCommandsChange={saveQuickCommands}
                             filesLoading={fileLoadingSessionIds.has(activeSession.id)}
