@@ -175,8 +175,7 @@ pub(super) async fn run_transfer(
                 0
             };
 
-            // 大文件 + 非续传：走多 File handle 并行下载，撬开 russh-sftp
-            // 单 File 串行 read 的瓶颈（每个独立 handle 都有自己的 in-flight READ）。
+            // 大文件 + 非续传：走多 File handle 并行下载以提升高延迟链路吞吐。
             let should_parallel = remote_size >= PARALLEL_DOWNLOAD_THRESHOLD
                 && resume_from == 0
                 && PARALLEL_DOWNLOAD_PARTS >= 2;
@@ -294,12 +293,8 @@ pub(super) async fn emit_transfer_progress(
 
 
 
-/// 共享底层字节搬运循环。所有 SFTP 上传 / UI SFTP 下载都走这条路径。
-/// 写在一处的好处：
-///   - 缓冲常量、读写循环、pause/cancel 检查只有一份代码，改一处全生效
-///   - 像之前 `tokio::io::copy` 默认 8KB 缓冲那种 bug 不会再"只在 API 端发生"
-///
-/// 进度上报由调用方负责（独立 ticker 读 `bytes_done` 即可），本函数不直接 emit。
+/// 共享底层字节搬运循环。SFTP 上传、UI 下载和 API 上传复用这套缓冲、
+/// pause/cancel 与计数字节逻辑；进度上报由调用方负责。
 pub(super) async fn copy_async<R, W>(
     src: &mut R,
     dst: &mut W,
@@ -416,11 +411,7 @@ where
     Ok(())
 }
 
-/// 多 File handle 并行下载：撬开 russh-sftp `File: AsyncRead` 串行 read 的瓶颈。
-///
-/// 同一个 SFTP 通道（或本会话的 transfer 池）允许多个 File handle 并存，
-/// 每个 handle 各自维护 in-flight READ 请求。N 个 handle 并行 ⇒ N 倍读吞吐，
-/// 直至 TCP 单流 cwnd 上限。
+/// 多 File handle 并行下载，用于提升大文件下载吞吐。
 ///
 /// 限制：调用方需保证 `remote_size > 0` 且无续传需求（resume_from == 0）。
 /// 任一 part 失败会立即 `cancel.store(true)` 让兄弟 task 自然退出，

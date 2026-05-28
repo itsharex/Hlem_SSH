@@ -4,6 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo } from "react";
 import type { AppSettings, BackupRecord, BackupSettings } from "../types";
 import { getErrorMessage } from "../lib/configMapping";
+import { formatBeijingCompactTimestamp, formatBeijingDateTime, formatBytes } from "../lib/format";
 
 interface BackupModalProps {
   open: boolean;
@@ -54,7 +55,7 @@ export function BackupModal({
       const { save } = await import("@tauri-apps/plugin-dialog");
       const path = await save({
         title: "导出备份",
-        defaultPath: `HelM-backup-${formatBeijingTimestamp()}-BJT.zip`,
+        defaultPath: `HelM-backup-${formatBeijingCompactTimestamp()}-BJT.zip`,
         filters: [{ name: "HelM 备份包", extensions: ["zip"] }],
       });
       if (!path) return;
@@ -150,11 +151,11 @@ export function BackupModal({
   }
 
   const columns: ColumnsType<BackupRecord> = [
-    { title: "时间", width: 150, render: (_, record) => new Date(record.createdAt).toLocaleString() },
+    { title: "时间", width: 150, render: (_, record) => formatBeijingDateTime(record.createdAt) },
     { title: "位置", width: 92, render: (_, record) => <Tag>{targetLabel(record.targetKind)}</Tag> },
     { title: "文件", dataIndex: "fileName", ellipsis: true },
     { title: "路径", dataIndex: "targetPath", ellipsis: true },
-    { title: "大小", width: 90, render: (_, record) => formatBytes(record.size) },
+    { title: "大小", width: 90, render: (_, record) => formatBytes(record.size, { zeroText: "-" }) },
     {
       title: "状态",
       width: 92,
@@ -205,11 +206,11 @@ export function BackupModal({
               getPopupContainer={(trigger) => trigger.closest(".ant-modal-body") || document.body}
               title={
                 <div className="backupRecordRowTooltipContent">
-                  <div><span>时间</span>{new Date(record.createdAt).toLocaleString()}</div>
+                  <div><span>时间</span>{formatBeijingDateTime(record.createdAt)}</div>
                   <div><span>位置</span>{targetLabel(record.targetKind)}</div>
                   <div><span>文件</span>{record.fileName}</div>
                   <div><span>路径</span>{record.targetPath}</div>
-                  <div><span>大小</span>{formatBytes(record.size)}</div>
+                  <div><span>大小</span>{formatBytes(record.size, { zeroText: "-" })}</div>
                   <div><span>状态</span>{record.status === "success" ? "成功" : "失败"}</div>
                 </div>
               }
@@ -386,16 +387,4 @@ function targetLabel(kind: BackupRecord["targetKind"]) {
   if (kind === "webdav") return "WebDAV";
   if (kind === "s3") return "S3";
   return "云端";
-}
-
-function formatBytes(bytes: number) {
-  if (!bytes) return "-";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatBeijingTimestamp() {
-  const date = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  return date.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
 }

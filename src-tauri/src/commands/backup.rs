@@ -1,89 +1,19 @@
-use std::path::PathBuf;
-
 use tauri::{AppHandle, State};
 
-use super::{with_store, AppError, AppResult, AppState};
+use super::{with_store, AppResult, AppState};
 use crate::backup::{
-    backup_file_name, build_backup_package, download_cloud_backup,
-    list_configured_backup_records, upload_cloud_backup,
+    download_cloud_backup, merge_configured_backup_records, prepare_backup_run,
+    run_configured_backup,
 };
-use crate::config::{BackupRecord, ConfigSnapshot};
+use crate::config::ConfigSnapshot;
+use crate::errors::AppError;
 
 #[tauri::command]
 pub async fn backup_run_now(state: State<'_, AppState>) -> AppResult<ConfigSnapshot> {
-    let (settings, vault_path, file_name) = with_store(&state, |store| {
-        store.ensure_unlocked()?;
-        Ok((
-            store.snapshot()?.data.settings.backup,
-            store.vault_file_path(),
-            backup_file_name(),
-        ))
-    })?;
-    let bytes = tokio::fs::read(&vault_path)
-        .await
-        .map_err(|e| AppError::Io(e.to_string()))?;
-    let package = build_backup_package(bytes).await?;
-    let size = package.len() as u64;
-    let mut backup_outcomes = Vec::new();
-    let has_local = settings
-        .local_directory
-        .as_deref()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-
-    if has_local {
-        let directory = PathBuf::from(settings.local_directory.as_deref().unwrap().trim());
-        let target = directory.join(&file_name);
-        match async {
-            tokio::fs::create_dir_all(&directory).await?;
-            tokio::fs::write(&target, &package).await?;
-            Ok::<(), std::io::Error>(())
-        }
-        .await
-        {
-            Ok(()) => backup_outcomes.push(BackupRecord::success(
-                file_name.clone(),
-                "local",
-                target.to_string_lossy().to_string(),
-                size,
-            )),
-            Err(e) => backup_outcomes.push(BackupRecord::failed(
-                file_name.clone(),
-                "local",
-                target.to_string_lossy().to_string(),
-                e.to_string(),
-            )),
-        }
-    }
-
-    if settings.cloud.enabled {
-        backup_outcomes
-            .push(upload_cloud_backup(&settings.cloud, &file_name, package.clone()).await);
-    }
-
-    if backup_outcomes.is_empty() {
-        return Err(AppError::InvalidInput(
-            "请先配置本地备份目录或启用云端备份".to_string(),
-        ));
-    }
-
-    let records = match list_configured_backup_records(&settings).await {
-        Ok(mut records) => {
-            for outcome in backup_outcomes {
-                let already_listed = records.iter().any(|r| {
-                    r.target_kind == outcome.target_kind && r.target_path == outcome.target_path
-                });
-                if outcome.status != "success" || !already_listed {
-                    records.push(outcome);
-                }
-            }
-            records
-        }
-        Err(_) => backup_outcomes,
-    };
-
-    let (snapshot, delete_paths) =
-        with_store(&state, |store| store.replace_backup_records(records))?;
+    let plan = with_store(&state, |store| prepare_backup_run(store))?;
+    let outcomes = run_configured_backup(&plan).await?;
+    let records = merge_configured_backup_records(&plan.settings, outcomes).await;
+    let (snapshot, delete_paths) = with_store(&state, |store| store.replace_backup_records(records))?;
     for path in delete_paths {
         let _ = tokio::fs::remove_file(path).await;
     }

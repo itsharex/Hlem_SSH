@@ -1,6 +1,6 @@
 use std::{
     io::{Cursor, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::SystemTime,
 };
 
@@ -20,6 +20,7 @@ use crate::{
         BackupRecord, BackupSettings, CloudBackupSettings, S3BackupConfig, WebdavBackupConfig,
     },
     errors::{AppError, AppResult},
+    vault::VaultStore,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -44,10 +45,108 @@ struct BackupManifest {
     payload: &'static str,
 }
 
+#[derive(Clone)]
+pub struct BackupRunPlan {
+    pub settings: BackupSettings,
+    pub vault_path: PathBuf,
+    pub file_name: String,
+}
+
+pub fn prepare_backup_run(store: &VaultStore) -> AppResult<BackupRunPlan> {
+    store.ensure_unlocked()?;
+    let snapshot = store.snapshot()?;
+    Ok(BackupRunPlan {
+        settings: snapshot.data.settings.backup,
+        vault_path: store.vault_file_path(),
+        file_name: backup_file_name(),
+    })
+}
+
 pub async fn build_backup_package(vault_bytes: Vec<u8>) -> AppResult<Vec<u8>> {
     tokio::task::spawn_blocking(move || build_backup_package_sync(&vault_bytes))
         .await
         .map_err(|error| AppError::Io(format!("备份打包任务失败: {error}")))?
+}
+
+pub async fn run_configured_backup(plan: &BackupRunPlan) -> AppResult<Vec<BackupRecord>> {
+    let bytes = tokio::fs::read(&plan.vault_path)
+        .await
+        .map_err(|e| AppError::Io(e.to_string()))?;
+    let package = build_backup_package(bytes).await?;
+    let size = package.len() as u64;
+    let mut outcomes = Vec::new();
+
+    if let Some(directory) = configured_local_backup_directory(&plan.settings) {
+        outcomes.push(write_local_backup(&directory, &plan.file_name, &package, size).await);
+    }
+    if plan.settings.cloud.enabled {
+        outcomes.push(upload_cloud_backup(&plan.settings.cloud, &plan.file_name, package.clone()).await);
+    }
+    if outcomes.is_empty() {
+        return Err(AppError::InvalidInput(
+            "请先配置本地备份目录或启用云端备份".to_string(),
+        ));
+    }
+
+    Ok(outcomes)
+}
+
+pub async fn merge_configured_backup_records(
+    settings: &BackupSettings,
+    backup_outcomes: Vec<BackupRecord>,
+) -> Vec<BackupRecord> {
+    match list_configured_backup_records(settings).await {
+        Ok(mut records) => {
+            for outcome in backup_outcomes {
+                let already_listed = records.iter().any(|r| {
+                    r.target_kind == outcome.target_kind && r.target_path == outcome.target_path
+                });
+                if outcome.status != "success" || !already_listed {
+                    records.push(outcome);
+                }
+            }
+            records
+        }
+        Err(_) => backup_outcomes,
+    }
+}
+
+pub fn configured_local_backup_directory(settings: &BackupSettings) -> Option<PathBuf> {
+    settings
+        .local_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+async fn write_local_backup(
+    directory: &Path,
+    file_name: &str,
+    package: &[u8],
+    size: u64,
+) -> BackupRecord {
+    let target = directory.join(file_name);
+    let write_result = async {
+        tokio::fs::create_dir_all(directory).await?;
+        tokio::fs::write(&target, package).await?;
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+    match write_result {
+        Ok(()) => BackupRecord::success(
+            file_name.to_string(),
+            "local",
+            target.to_string_lossy().to_string(),
+            size,
+        ),
+        Err(e) => BackupRecord::failed(
+            file_name.to_string(),
+            "local",
+            target.to_string_lossy().to_string(),
+            e.to_string(),
+        ),
+    }
 }
 
 fn build_backup_package_sync(vault_bytes: &[u8]) -> AppResult<Vec<u8>> {
@@ -794,6 +893,7 @@ fn xml_unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn joins_backup_urls_and_keys() {
@@ -840,5 +940,87 @@ mod tests {
         let package = build_backup_package_sync(&payload).unwrap();
         assert!(package.len() > payload.len());
         assert_eq!(extract_backup_payload(&package).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn rejects_backup_without_any_target() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rpvault");
+        tokio::fs::write(&vault_path, b"vault").await.unwrap();
+        let settings = BackupSettings {
+            local_directory: None,
+            cloud: CloudBackupSettings::default(),
+            ..BackupSettings::default()
+        };
+        let plan = BackupRunPlan {
+            settings,
+            vault_path,
+            file_name: "HelM-backup-test-BJT.zip".to_string(),
+        };
+
+        assert!(matches!(
+            run_configured_backup(&plan).await,
+            Err(AppError::InvalidInput(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn writes_local_backup_record() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rpvault");
+        let backup_dir = dir.path().join("backups");
+        tokio::fs::write(&vault_path, b"vault").await.unwrap();
+        let settings = BackupSettings {
+            local_directory: Some(backup_dir.to_string_lossy().to_string()),
+            ..BackupSettings::default()
+        };
+        let plan = BackupRunPlan {
+            settings,
+            vault_path,
+            file_name: "HelM-backup-test-BJT.zip".to_string(),
+        };
+
+        let records = run_configured_backup(&plan).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target_kind, "local");
+        assert_eq!(records[0].status, "success");
+        assert!(backup_dir.join("HelM-backup-test-BJT.zip").exists());
+    }
+
+    #[tokio::test]
+    async fn merge_configured_backup_records_skips_listed_successes() {
+        let dir = tempdir().unwrap();
+        let backup_dir = dir.path().join("backups");
+        tokio::fs::create_dir_all(&backup_dir).await.unwrap();
+        let existing_path = backup_dir.join("HelM-backup-old-BJT.zip");
+        tokio::fs::write(&existing_path, build_backup_package(b"vault".to_vec()).await.unwrap())
+            .await
+            .unwrap();
+        let settings = BackupSettings {
+            local_directory: Some(backup_dir.to_string_lossy().to_string()),
+            ..BackupSettings::default()
+        };
+        let duplicate = BackupRecord::success(
+            "HelM-backup-old-BJT.zip".to_string(),
+            "local",
+            existing_path.to_string_lossy().to_string(),
+            1,
+        );
+        let failed = BackupRecord::failed(
+            "HelM-backup-new-BJT.zip".to_string(),
+            "local",
+            backup_dir.join("HelM-backup-new-BJT.zip").to_string_lossy().to_string(),
+            "disk full".to_string(),
+        );
+
+        let merged = merge_configured_backup_records(&settings, vec![duplicate, failed]).await;
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|record| record.file_name == "HelM-backup-old-BJT.zip")
+                .count(),
+            1
+        );
+        assert!(merged.iter().any(|record| record.status == "failed"));
     }
 }

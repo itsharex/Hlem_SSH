@@ -1,0 +1,159 @@
+import { Modal } from "antd";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { appApi } from "../api/appApi";
+import { defaultBackupSettings, vaultApi } from "../api/vaultApi";
+import { getErrorMessage } from "../lib/configMapping";
+import type { AppInfo, ConfigSnapshot, UpdateInfo } from "../types";
+
+type UseAppUpdaterOptions = {
+  appReady: boolean;
+  appInfo: AppInfo | null;
+  setAppInfo: (info: AppInfo) => void;
+  configSnapshotRef: MutableRefObject<ConfigSnapshot | undefined>;
+  applyConfigSnapshot: (snapshot: ConfigSnapshot) => void;
+};
+
+export function useAppUpdater({
+  appReady,
+  appInfo,
+  setAppInfo,
+  configSnapshotRef,
+  applyConfigSnapshot,
+}: UseAppUpdaterOptions) {
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [downloadedUpdatePath, setDownloadedUpdatePath] = useState<string | null>(null);
+  const autoUpdateTimerRef = useRef<number | null>(null);
+  const autoUpdateScheduledRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (autoUpdateTimerRef.current !== null) {
+        window.clearTimeout(autoUpdateTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!appReady || !appInfo) return;
+    scheduleAutoUpdateCheck(appInfo);
+  }, [appInfo, appReady]);
+
+  function scheduleAutoUpdateCheck(info: AppInfo) {
+    if (autoUpdateScheduledRef.current || autoUpdateTimerRef.current !== null) return;
+    autoUpdateScheduledRef.current = true;
+    autoUpdateTimerRef.current = window.setTimeout(() => {
+      autoUpdateTimerRef.current = null;
+      runWhenBrowserIdle(() => void checkForUpdate(false, info));
+    }, 8000);
+  }
+
+  async function checkForUpdate(manual = true, knownInfo = appInfo) {
+    const info = knownInfo ?? (await appApi.info());
+    setAppInfo(info);
+    if (!appApi.updateRepo()) {
+      if (manual) Modal.warning({ title: "未配置更新源", content: "发布版会由 GitHub Actions 自动写入更新仓库地址。" });
+      return;
+    }
+    if (manual) {
+      setUpdateChecking(true);
+      setUpdateError(null);
+    }
+    try {
+      const next = await appApi.checkUpdate(info.version, info.arch);
+      if (!next) {
+        setUpdateInfo(next);
+        return;
+      }
+      const ignored = configSnapshotRef.current?.data.settings?.ignoredUpdateVersions ?? [];
+      const candidate = normalizeIgnoredVersion(next.latestVersion, next.tagName);
+      setUpdateInfo(next.hasUpdate && candidate && ignored.includes(candidate) ? { ...next, hasUpdate: false } : next);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      if (manual) {
+        setUpdateError(message);
+        Modal.error({ title: "检查更新失败", content: message });
+      } else {
+        console.warn("[helm] auto update check failed:", message);
+      }
+    } finally {
+      if (manual) setUpdateChecking(false);
+    }
+  }
+
+  async function downloadUpdate(target = updateInfo) {
+    if (!target?.asset) return;
+    setUpdateDownloading(true);
+    try {
+      const path = await appApi.downloadSignedUpdate(target.asset.downloadUrl, target.asset.name, target.asset.sha256);
+      setDownloadedUpdatePath(path);
+    } catch (error) {
+      Modal.error({ title: "下载更新失败", content: getErrorMessage(error) });
+    } finally {
+      setUpdateDownloading(false);
+    }
+  }
+
+  async function installUpdate() {
+    if (!downloadedUpdatePath) return;
+    try {
+      await appApi.installUpdate(downloadedUpdatePath);
+    } catch (error) {
+      Modal.error({ title: "启动安装程序失败", content: getErrorMessage(error) });
+    }
+  }
+
+  async function ignoreUpdateVersion(target = updateInfo) {
+    const snapshot = configSnapshotRef.current;
+    if (!target || !snapshot) return;
+    const candidate = normalizeIgnoredVersion(target.latestVersion, target.tagName);
+    if (!candidate) return;
+    const previous = snapshot.data.settings?.ignoredUpdateVersions ?? [];
+    if (previous.includes(candidate)) {
+      setUpdateInfo({ ...target, hasUpdate: false });
+      return;
+    }
+    try {
+      const next = await vaultApi.settingsUpdate({
+        ...snapshot.data.settings,
+        backup: snapshot.data.settings.backup ?? defaultBackupSettings(),
+        ignoredUpdateVersions: [...previous, candidate],
+      });
+      applyConfigSnapshot(next);
+      setUpdateInfo({ ...target, hasUpdate: false });
+    } catch (error) {
+      Modal.error({ title: "忽略版本失败", content: getErrorMessage(error) });
+    }
+  }
+
+  return {
+    updateInfo,
+    updateError,
+    updateChecking,
+    updateDownloading,
+    downloadedUpdatePath,
+    checkForUpdate,
+    downloadUpdate,
+    installUpdate,
+    ignoreUpdateVersion,
+  };
+}
+
+function runWhenBrowserIdle(task: () => void) {
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(task, { timeout: 15_000 });
+    return;
+  }
+  window.setTimeout(task, 0);
+}
+
+function normalizeIgnoredVersion(latestVersion: string | undefined, tagName: string | undefined) {
+  const candidate = (latestVersion || tagName || "").trim();
+  if (!candidate) return "";
+  return candidate.replace(/^v/i, "");
+}

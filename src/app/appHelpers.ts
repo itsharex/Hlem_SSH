@@ -5,6 +5,7 @@ import {
   joinPath as joinRemotePath,
   resolveRemoteTargetPath,
 } from "../lib/path";
+import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "../lib/editorChannel";
 import type {
   BackupSettings,
   HostKeyVerification,
@@ -211,6 +212,23 @@ export function sftpUnavailableMessage(error: unknown) {
   const message = getErrorMessage(error);
   if (!message.includes("ConnectFailed")) return message;
   return `${message} 建议在服务器 /etc/ssh/sshd_config 中提高 MaxSessions（例如 10），确认 Subsystem sftp 已启用，然后重启 sshd。`;
+}
+
+export function formatSessionError(
+  error: unknown,
+  session: Pick<RemoteSession, "name" | "connectionId" | "terminalId" | "sftpId">,
+): string {
+  let message = getErrorMessage(error);
+  for (const id of [session.connectionId, session.terminalId, session.sftpId]) {
+    if (id) message = message.split(id).join(session.name);
+  }
+  return message;
+}
+
+export function notifyEditorSessionDisconnected(sessionId: string) {
+  const channel = new BroadcastChannel(editorChannelName(GLOBAL_EDITOR_CHANNEL));
+  channel.postMessage({ type: "sessionDisconnected", sessionId } satisfies EditorChannelMessage);
+  channel.close();
 }
 
 export function getHostKeyPayload(error: unknown): HostKeyVerification | null {

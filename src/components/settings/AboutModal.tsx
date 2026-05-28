@@ -1,5 +1,6 @@
 import { AppleOutlined, CheckCircleOutlined, CloudDownloadOutlined, DatabaseOutlined, DesktopOutlined, ExclamationCircleOutlined, FolderOpenOutlined, LinkOutlined, RocketOutlined, SyncOutlined, WindowsOutlined } from "@ant-design/icons";
 import { Button, Modal, Tooltip, Typography } from "antd";
+import { formatBytes } from "../../lib/format";
 import type { AppInfo, UpdateInfo } from "../../types";
 
 interface AboutModalProps {
@@ -60,7 +61,7 @@ export function AboutModal({
           <RocketOutlined className="aboutStatusIcon" />
           <div className="aboutStatusText">
             <strong>发现新版本 {updateInfo.tagName || `v${updateInfo.latestVersion}`}</strong>
-            <span>{updateInfo.asset ? `${updateInfo.asset.name} · ${formatBytes(updateInfo.asset.size)}` : "当前 Release 没有找到 Windows 安装包"}</span>
+            <span>{updateInfo.asset ? `${updateInfo.asset.name} · ${formatBytes(updateInfo.asset.size, { invalidText: "未知大小", zeroText: "未知大小" })}` : "当前 Release 没有找到 Windows 安装包"}</span>
           </div>
         </button>
       ) : updateInfo ? (
@@ -130,12 +131,6 @@ export function AboutModal({
       </div>
     </Modal>
   );
-}
-
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "未知大小";
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function systemIcon(os?: string | null) {

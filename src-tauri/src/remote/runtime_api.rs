@@ -10,14 +10,8 @@ use std::task::{Context, Poll};
 use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 
-/// 多 mpsc 顺序拼接流：N 个 worker 各自往一个 mpsc 推 Bytes，
-/// 主流按 worker 0 → 1 → ... → N-1 的顺序消费，得到一个连续的字节流，
-/// 喂给 axum `Body::from_stream` 即可走出 HTTP 响应。
-///
-/// 这是 AI API 下载的并行多 File handle 方案的最后一块拼图：
-///   - 各 worker 拿独立 SFTP File handle，各自 in-flight READ → N 倍读吞吐
-///   - 通过有界 channel 提供反压，每个 worker 最多预读 PER_WORKER_QUEUE_DEPTH * buffer 字节
-///   - 客户端断开 → receiver drop → worker `tx.send` 返回 Err → worker 自然退出
+/// 顺序拼接多个 worker 的 SFTP 字节流，用于 HTTP 并行下载响应。
+/// 每个 worker 独立读取一个远端范围，主流按范围顺序输出并保留反压。
 pub struct OrderedChunkStream {
     receivers: VecDeque<mpsc::Receiver<io::Result<Bytes>>>,
 }
@@ -231,18 +225,6 @@ impl RemoteRuntime {
         Ok(record.next_transfer_session().await)
     }
 
-    /// Find the sftp_id for a given session. Returns the sftp_id string.
-    #[allow(dead_code)]
-    pub async fn find_sftp_id_for_session(&self, session_id: &str) -> Result<String, String> {
-        let connection_id = self.find_connection_for_session(session_id).await?;
-        let sftp_sessions = self.sftp_sessions.read().await;
-        let record = sftp_sessions
-            .values()
-            .find(|record| record.info.connection_id == connection_id)
-            .ok_or_else(|| format!("会话 {} 没有可用的 SFTP 连接", session_id))?;
-        Ok(record.info.sftp_id.clone())
-    }
-
     /// 流式上传：从任意 AsyncRead 直写到远端 SFTP 文件。
     ///
     /// 与 UI 的 `transfer_upload` 共用底层 `copy_async` 字节循环——同一份缓冲常量、
@@ -300,15 +282,13 @@ impl RemoteRuntime {
         Ok(bytes_done.load(std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// 多 File handle 并行流式下载：与 UI 拖拽下载共用同一套并行思路，区别在于
-    /// 终点是 HTTP `Body::from_stream` 而非本地文件。
+    /// 多 File handle 并行流式下载。与 UI 拖拽下载共用阈值和缓冲策略，
+    /// 这里的终点是 HTTP `Body::from_stream`。
     ///
     /// 调用方应在 `total_len >= PARALLEL_DOWNLOAD_THRESHOLD` 且 `parts >= 2` 时
     /// 才走这条路径；否则单 handle + ReaderStream 就够了。
     ///
-    /// 工作流：N 个 spawn worker，各自 `next_transfer_session` 拿一个 SftpSession，
-    /// 各自 `open(path) + seek(chunk_start)` 拿独立 File handle，按 chunk_len 读取
-    /// 并 `tx.send(Bytes)` 到自己的 mpsc。主返回的 OrderedChunkStream 顺序消费。
+    /// N 个 worker 各自读取一个范围，`OrderedChunkStream` 负责按范围顺序输出。
     pub async fn parallel_download_stream(
         &self,
         session_id: &str,

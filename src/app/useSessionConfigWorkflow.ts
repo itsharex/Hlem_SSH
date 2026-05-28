@@ -1,0 +1,76 @@
+import { useState } from "react";
+import { vaultApi } from "../api/vaultApi";
+import { createDefaultSessionInput } from "../lib/configMapping";
+import { createNextSessionName, sessionConfigToInput } from "./appHelpers";
+import type { SessionModalState } from "./appTypes";
+import type { ConfigSnapshot, SessionInput } from "../types";
+
+type UseSessionConfigWorkflowOptions = {
+  configSnapshot: ConfigSnapshot | undefined;
+  activeSessionId: string;
+  applySnapshot: (snapshot: ConfigSnapshot, preferredSessionId?: string, preserveRuntime?: boolean) => void;
+  openSessionList: () => void;
+};
+
+export function useSessionConfigWorkflow({
+  configSnapshot,
+  activeSessionId,
+  applySnapshot,
+  openSessionList,
+}: UseSessionConfigWorkflowOptions) {
+  const [sessionModal, setSessionModal] = useState<SessionModalState | null>(null);
+  const [returnToSessionListOnCancel, setReturnToSessionListOnCancel] = useState(false);
+
+  async function addSession(returnToListOnCancel = false) {
+    if (!configSnapshot) return;
+    setReturnToSessionListOnCancel(returnToListOnCancel);
+    setSessionModal({
+      mode: "create",
+      input: createDefaultSessionInput(configSnapshot.data.sessions.length + 1, configSnapshot.data.groups[0]?.id),
+    });
+  }
+
+  function editSession(id = activeSessionId, returnToListOnCancel = false) {
+    const config = configSnapshot?.data.sessions.find((session) => session.id === id);
+    if (!config) return;
+    setReturnToSessionListOnCancel(returnToListOnCancel);
+    setSessionModal({ mode: "edit", sessionId: id, input: sessionConfigToInput(config) });
+  }
+
+  async function saveSessionConfig(input: SessionInput) {
+    if (!configSnapshot || !sessionModal) return;
+    const namedInput = {
+      ...input,
+      name: input.name.trim() || createNextSessionName(configSnapshot.data.sessions, sessionModal.mode === "edit" ? sessionModal.sessionId : undefined),
+    };
+    if (sessionModal.mode === "create") {
+      const snapshot = await vaultApi.sessionCreate(namedInput);
+      const createdId = snapshot.data.sessions[snapshot.data.sessions.length - 1]?.id;
+      applySnapshot(snapshot, createdId);
+    } else {
+      const snapshot = await vaultApi.sessionUpdate(sessionModal.sessionId, namedInput);
+      applySnapshot(snapshot, sessionModal.sessionId);
+    }
+    closeSessionConfigModal();
+  }
+
+  function closeSessionConfigModal() {
+    setSessionModal(null);
+    setReturnToSessionListOnCancel(false);
+  }
+
+  function backToSessionListFromConfig() {
+    closeSessionConfigModal();
+    openSessionList();
+  }
+
+  return {
+    sessionModal,
+    returnToSessionListOnCancel,
+    addSession,
+    editSession,
+    saveSessionConfig,
+    closeSessionConfigModal,
+    backToSessionListFromConfig,
+  };
+}

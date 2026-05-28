@@ -10,7 +10,21 @@ import {
   UploadOutlined,
 } from "@ant-design/icons";
 import { Button, Drawer, Empty, Progress, Space, Tooltip } from "antd";
-import { formatBytes } from "../lib/format";
+import { formatBeijingDateTime, formatBytes } from "../lib/format";
+import {
+  backupKindText,
+  backupStatusText,
+  formatTransferSpeed,
+  isActiveTransfer,
+  isTransferDone,
+  saveStatusText,
+  transferName,
+  transferProgressStatus,
+  transferSourcePath,
+  transferStatusText,
+  transferStatusTone,
+  transferTargetPath,
+} from "../lib/transferRecords";
 import type { BackupRecord, FileSaveRecord, RemoteSession, TransferInfo } from "../types";
 
 interface TransferCenterProps {
@@ -196,8 +210,7 @@ function renderAllRecords(props: RenderAllRecordsProps) {
 
 function isActiveRecord(item: UnifiedRecord): boolean {
   if (item.type === "transfer") {
-    const status = item.record.status;
-    return status === "queued" || status === "running" || status === "paused";
+    return isActiveTransfer(item.record);
   }
   if (item.type === "save") {
     return item.record.status === "saving";
@@ -243,7 +256,7 @@ function renderBackupRecord(record: BackupRecord, props: RenderAllRecordsProps) 
       <div className="transferListPaths">
         <span title={record.targetPath}>位置：{record.targetPath}</span>
         <span>大小：{formatBytes(record.size)}</span>
-        <span>时间：{formatBeijingTime(record.createdAt)}</span>
+        <span>时间：{formatBeijingDateTime(record.createdAt)}</span>
       </div>
       {record.error && <div className="transferListError">{record.error}</div>}
     </article>
@@ -284,7 +297,7 @@ function renderSaveRecord(record: FileSaveRecord, props: RenderAllRecordsProps) 
       </div>
       <div className="transferListPaths">
         <span title={record.directory}>目录：{record.directory}</span>
-        <span>时间：{formatBeijingTime(record.savedAt)}</span>
+        <span>时间：{formatBeijingDateTime(record.savedAt)}</span>
       </div>
       {record.error && <div className="transferListError">{record.error}</div>}
     </article>
@@ -302,7 +315,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
   const targetConnected = Boolean(targetSession?.state === "connected" && targetSession.sftpId);
   const retryDisabled = retryable && !targetConnected;
   const retryTitle = retryDisabled ? "目标终端未连接" : transfer.direction === "upload" ? "重试上传" : "重新下载";
-  const detailTooltip = transferDetailTooltip(transfer, targetSession, targetConnected);
+  const detailTooltip = transferDetailTooltip(transfer, targetSession);
 
   return (
     <Tooltip
@@ -318,8 +331,8 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
             <strong>{transferName(transfer)}</strong>
             <span>
               {transfer.direction === "upload" ? "上传" : "下载"} ·{" "}
-              <span className={`transferInlineStatus transferInlineStatus-${statusTone(transfer)}`}>
-                {statusText(transfer)}
+              <span className={`transferInlineStatus transferInlineStatus-${transferStatusTone(transfer)}`}>
+                {transferStatusText(transfer)}
               </span>
             </span>
           </div>
@@ -372,7 +385,7 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
                   aria-label="打开文件夹"
                   icon={<FolderOpenOutlined />}
                   size="small"
-                  onClick={() => props.onOpenDir(targetPath(transfer))}
+                  onClick={() => props.onOpenDir(transferTargetPath(transfer))}
                 />
               </Tooltip>
             )}
@@ -391,61 +404,23 @@ function renderTransferRecord(transfer: TransferInfo, props: RenderAllRecordsPro
             {transfer.direction === "upload" ? "目标终端" : "来源终端"}：{targetSession?.name ?? "未知终端"}
             {targetSession ? ` · ${targetConnected ? "已连接" : "未连接"}` : ""}
           </span>
-          <span>来源：{sourcePath(transfer)}</span>
-          <span>{transfer.direction === "upload" ? "目标" : "保存"}：{targetPath(transfer)}</span>
+          <span>来源：{transferSourcePath(transfer)}</span>
+          <span>{transfer.direction === "upload" ? "目标" : "保存"}：{transferTargetPath(transfer)}</span>
         </div>
         <Progress
           percent={percent}
           size="small"
-          status={progressStatus(transfer)}
+          status={transferProgressStatus(transfer)}
           showInfo={false}
         />
         <div className="transferListMeta">
           <span>{formatBytes(transfer.bytesDone)} / {formatBytes(transfer.bytesTotal)}</span>
-          <span>{formatSpeed(transfer)}</span>
+          <span>{formatTransferSpeed(transfer)}</span>
         </div>
         {transfer.error && !isTransferDone(transfer) && <div className="transferListError">{transfer.error}</div>}
       </article>
     </Tooltip>
   );
-}
-
-function saveStatusText(status: FileSaveRecord["status"]) {
-  if (status === "saving") return "保存中";
-  if (status === "success") return "保存成功";
-  return "保存失败";
-}
-
-function backupStatusText(status: BackupRecord["status"]) {
-  if (status === "success") return "备份成功";
-  return "备份失败";
-}
-
-function backupKindText(kind: BackupRecord["targetKind"]) {
-  if (kind === "local") return "本地";
-  if (kind === "webdav") return "WebDAV";
-  if (kind === "s3") return "S3";
-  if (kind === "cloud") return "云端";
-  return kind;
-}
-
-function formatBeijingTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function transferName(transfer: TransferInfo) {
-  return transfer.localPath.split(/[\\/]/).pop() || transfer.remotePath.split("/").pop() || transfer.remotePath;
 }
 
 function sessionForTransfer(
@@ -460,83 +435,31 @@ function sessionForTransfer(
   );
 }
 
-function sourcePath(transfer: TransferInfo) {
-  return transfer.direction === "upload" ? parentPath(transfer.localPath) : parentPath(transfer.remotePath);
-}
-
-function targetPath(transfer: TransferInfo) {
-  return transfer.direction === "upload" ? parentPath(transfer.remotePath) : parentPath(transfer.localPath);
-}
-
-function parentPath(path: string) {
-  const normalized = path.replace(/\\/g, "/");
-  const index = normalized.lastIndexOf("/");
-  if (index <= 0) return normalized || "/";
-  if (/^[A-Za-z]:$/.test(normalized.slice(0, index))) return `${normalized.slice(0, index)}/`;
-  return normalized.slice(0, index);
-}
-
-function isTransferDone(transfer: TransferInfo) {
-  return transfer.bytesTotal > 0 && transfer.bytesDone >= transfer.bytesTotal;
-}
-
-function statusText(transfer: TransferInfo) {
-  if (isTransferDone(transfer)) return "已完成";
-  const map: Record<TransferInfo["status"], string> = {
-    queued: "等待中",
-    running: "传输中",
-    paused: "已暂停",
-    completed: "已完成",
-    failed: "失败",
-    canceled: "已停止",
-  };
-  return map[transfer.status];
-}
-
-function statusTone(transfer: TransferInfo) {
-  if (isTransferDone(transfer)) return "success";
-  if (transfer.status === "failed" || transfer.status === "canceled") return "failed";
-  return "warning";
-}
-
-function progressStatus(transfer: TransferInfo) {
-  if (isTransferDone(transfer)) return "success";
-  if (transfer.status === "failed" || transfer.status === "canceled") return "exception";
-  if (transfer.status === "completed") return "success";
-  return "active";
-}
-
-function formatSpeed(transfer: TransferInfo) {
-  if (transfer.status !== "running" || transfer.speedKbps <= 0) return "0 KB/s";
-  return `${formatBytes(transfer.speedKbps * 1024)}/s`;
-}
-
 function transferDetailTooltip(
   transfer: TransferInfo,
   targetSession: RemoteSession | null,
-  targetConnected: boolean,
 ) {
   return (
     <div className="detailHoverPanel transferDetailHoverPanel">
       <div className="detailHoverHeader">
         <div className="detailHoverTitle">{transferName(transfer)}</div>
-        <div className={`detailHoverBadge detailHoverBadge-${statusTone(transfer)}`}>
-          {transfer.direction === "upload" ? "上传" : "下载"} · {statusText(transfer)}
+        <div className={`detailHoverBadge detailHoverBadge-${transferStatusTone(transfer)}`}>
+          {transfer.direction === "upload" ? "上传" : "下载"} · {transferStatusText(transfer)}
         </div>
       </div>
       <div className="detailHoverGrid">
         <span>终端</span>
         <strong>{targetSession?.name ?? "未知终端"}</strong>
         <span>来源</span>
-        <strong>{sourcePath(transfer)}</strong>
+        <strong>{transferSourcePath(transfer)}</strong>
         <span>{transfer.direction === "upload" ? "目标" : "保存"}</span>
-        <strong>{targetPath(transfer)}</strong>
+        <strong>{transferTargetPath(transfer)}</strong>
         <span>大小</span>
         <strong>{formatBytes(transfer.bytesDone)} / {formatBytes(transfer.bytesTotal)}</strong>
         <span>创建时间</span>
-        <strong>{formatBeijingTime(transfer.createdAt)}</strong>
+        <strong>{formatBeijingDateTime(transfer.createdAt)}</strong>
         <span>更新时间</span>
-        <strong>{formatBeijingTime(transfer.updatedAt)}</strong>
+        <strong>{formatBeijingDateTime(transfer.updatedAt)}</strong>
         {transfer.error && !isTransferDone(transfer) && (
           <>
             <span>错误</span>

@@ -114,24 +114,6 @@ impl RemoteRuntime {
         Ok(())
     }
 
-    /// Wait for a transfer to complete, polling every 200ms. Returns final TransferInfo.
-    #[allow(dead_code)]
-    pub async fn wait_transfer(&self, transfer_id: &str) -> AppResult<TransferInfo> {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let transfers = self.transfers.read().await;
-            let record = transfers
-                .get(transfer_id)
-                .ok_or_else(|| AppError::missing_transfer(transfer_id))?;
-            match record.info.status {
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Canceled => {
-                    return Ok(record.info.clone());
-                }
-                _ => {}
-            }
-        }
-    }
-
     pub async fn transfer_retry(
         &self,
         app: &AppHandle,

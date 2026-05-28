@@ -78,9 +78,7 @@ impl RemoteRuntime {
         );
 
         let mut config = client::Config::default();
-        // 不要在这里设置 inactivity_timeout。之前用过 connect_timeout_ms (~10s)，
-        // 比 keepalive_interval 还短，会让 russh 在 keepalive 发出前就把空闲连接
-        // 当作死连接回收掉。设为 None，让 keepalive 机制独占判定连接活性的权限。
+        // inactivity_timeout 交给 keepalive 机制统一判断，避免空闲但健康的连接被提前回收。
         config.inactivity_timeout = None;
         config.keepalive_interval = Some(Duration::from_secs(
             session.ssh.keepalive_interval_sec.max(1) as u64,
@@ -186,9 +184,7 @@ impl RemoteRuntime {
     /// （keepalive_max 触发后），则把它当作"假死连接"清理掉并 emit Disconnected
     /// 事件，让前端的"重新连接"按钮能正常出现。
     ///
-    /// 之前只有 `runtime_terminal` 的 reader task 退出时才会做这件事，意味着
-    /// 用户只用 AI API 不开终端的场景下，僵尸连接永远不会被清理 —— 这是 AI API
-    /// 长跑后"假死"的主因之一。
+    /// 覆盖只使用 API、不打开终端的场景，确保 keepalive 标记关闭后的连接能被统一清理。
     pub fn spawn_dead_connection_reaper(&self, app: AppHandle) {
         let runtime = self.clone();
         tokio::spawn(async move {

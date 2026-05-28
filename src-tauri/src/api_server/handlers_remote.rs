@@ -88,6 +88,33 @@ pub(super) struct FilesQuery {
     path: String,
 }
 
+async fn require_auth(state: &ApiServerState, headers: &HeaderMap) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let key = state.api_key.read().await;
+    verify_auth(headers, &key)
+}
+
+fn bad_request(message: &str) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError {
+            error: message.to_string(),
+        }),
+    )
+}
+
+fn internal_error(message: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiError {
+            error: message.to_string(),
+        }),
+    )
+}
+
+fn elapsed_ms(start: std::time::Instant) -> u64 {
+    start.elapsed().as_millis() as u64
+}
+
 // ─── Auth probe ────────────────────────────────────────────────────────────────
 
 /// 鉴权探活 + 端点目录。
@@ -95,9 +122,7 @@ pub async fn auth_check(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
     Ok(Json(serde_json::json!({
         "authenticated": true,
         "auth": "Authorization: Bearer <api_key>",
@@ -132,13 +157,11 @@ pub async fn rest_sessions(
     headers: HeaderMap,
     AxumState(state): AxumState<ApiServerState>,
 ) -> Result<Json<Vec<SessionItem>>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     let start = std::time::Instant::now();
     let sessions = state.remote.list_connected_sessions().await;
-    let elapsed = start.elapsed().as_millis() as u64;
+    let elapsed = elapsed_ms(start);
     push_log(
         &state,
         "rest/sessions",
@@ -156,17 +179,10 @@ pub async fn rest_connect(
     AxumState(state): AxumState<ApiServerState>,
     Json(body): Json<SessionIdBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     if body.session_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 sessionId".into(),
-            }),
-        ));
+        return Err(bad_request("缺少 sessionId"));
     }
     verify_session_access(&state, &body.session_id)?;
 
@@ -176,15 +192,8 @@ pub async fn rest_connect(
         let store = state
             .vault
             .lock()
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "内部锁错误".into() })))?;
-        crate::commands::build_session_for_connect(&store, &body.session_id).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: e.to_string(),
-                }),
-            )
-        })?
+            .map_err(|_| internal_error("内部锁错误"))?;
+        crate::commands::build_session_for_connect(&store, &body.session_id).map_err(internal_error)?
     };
     let (session, known_host) = bundle;
 
@@ -194,12 +203,12 @@ pub async fn rest_connect(
         .await
     {
         Ok(info) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(&state, "rest/connect", &body.session_id, true, elapsed).await;
             Ok(Json(serde_json::to_value(info).unwrap_or_default()))
         }
         Err(error) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             let msg = error.to_string();
             push_log(
                 &state,
@@ -209,10 +218,7 @@ pub async fn rest_connect(
                 elapsed,
             )
             .await;
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError { error: msg }),
-            ))
+            Err(internal_error(msg))
         }
     }
 }
@@ -223,17 +229,10 @@ pub async fn rest_disconnect(
     AxumState(state): AxumState<ApiServerState>,
     Json(body): Json<SessionIdBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     if body.session_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 sessionId".into(),
-            }),
-        ));
+        return Err(bad_request("缺少 sessionId"));
     }
     verify_session_access(&state, &body.session_id)?;
 
@@ -244,12 +243,12 @@ pub async fn rest_disconnect(
         .await
     {
         Ok(_) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(&state, "rest/disconnect", &body.session_id, true, elapsed).await;
             Ok(Json(serde_json::json!({ "success": true })))
         }
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(
                 &state,
                 "rest/disconnect",
@@ -258,10 +257,7 @@ pub async fn rest_disconnect(
                 elapsed,
             )
             .await;
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError { error: e }),
-            ))
+            Err(internal_error(e))
         }
     }
 }
@@ -274,17 +270,10 @@ pub async fn rest_exec(
     AxumState(state): AxumState<ApiServerState>,
     Json(body): Json<ExecBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     if body.session_id.is_empty() || body.command.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 sessionId 或 command".into(),
-            }),
-        ));
+        return Err(bad_request("缺少 sessionId 或 command"));
     }
     if let Some(reason) = check_dangerous_command(&body.command) {
         return Err((
@@ -306,7 +295,7 @@ pub async fn rest_exec(
         .await
     {
         Ok(result) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             let success = !result.timed_out && result.exit_status.unwrap_or(1) == 0;
             // 日志里只截一段输出当预览
             let preview: String = {
@@ -332,7 +321,7 @@ pub async fn rest_exec(
             Ok(Json(serde_json::to_value(result).unwrap_or_default()))
         }
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(
                 &state,
                 "rest/exec",
@@ -352,17 +341,10 @@ pub async fn rest_files(
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<FilesQuery>,
 ) -> Result<Json<Vec<FileEntry>>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     if query.session_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "缺少 sessionId".into(),
-            }),
-        ));
+        return Err(bad_request("缺少 sessionId"));
     }
     verify_session_access(&state, &query.session_id)?;
 
@@ -373,7 +355,7 @@ pub async fn rest_files(
         .await
     {
         Ok(entries) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(
                 &state,
                 "rest/files",
@@ -385,7 +367,7 @@ pub async fn rest_files(
             Ok(Json(entries))
         }
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(
                 &state,
                 "rest/files",
@@ -408,15 +390,13 @@ pub async fn upload_file_raw(
     Query(query): Query<UploadRawQuery>,
     body: Body,
 ) -> Result<Json<UploadResponse>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     if query.session_id.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 sessionId 查询参数".into() })));
+        return Err(bad_request("缺少 sessionId 查询参数"));
     }
     if query.remote_path.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: "缺少 remotePath 查询参数".into() })));
+        return Err(bad_request("缺少 remotePath 查询参数"));
     }
 
     verify_session_access(&state, &query.session_id)?;
@@ -435,7 +415,7 @@ pub async fn upload_file_raw(
     {
         Ok(n) => n,
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(
                 &state,
                 "upload",
@@ -448,7 +428,7 @@ pub async fn upload_file_raw(
         }
     };
 
-    let elapsed = start.elapsed().as_millis() as u64;
+    let elapsed = elapsed_ms(start);
     push_log(
         &state,
         "upload",
@@ -471,9 +451,7 @@ pub async fn download_file(
     AxumState(state): AxumState<ApiServerState>,
     Query(query): Query<DownloadQuery>,
 ) -> Result<Response<Body>, (StatusCode, Json<ApiError>)> {
-    let key = state.api_key.read().await;
-    verify_auth(&headers, &key)?;
-    drop(key);
+    require_auth(&state, &headers).await?;
 
     verify_session_access(&state, &query.session_id)?;
     let start = std::time::Instant::now();
@@ -486,7 +464,7 @@ pub async fn download_file(
     let metadata = match sftp.metadata(query.path.clone()).await {
         Ok(m) => m,
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = elapsed_ms(start);
             push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
             return Err((StatusCode::NOT_FOUND, Json(ApiError { error: format!("无法读取远程文件: {}", e) })));
         }
@@ -507,8 +485,7 @@ pub async fn download_file(
     };
     let send_len = if total_size == 0 { 0 } else { end_offset - start_offset + 1 };
 
-    // 大段范围（≥ 32MB）走并行多 File handle，撬开 russh-sftp 单 File 串行 read 的瓶颈。
-    // 与 UI 拖拽下载共用同一套阈值 / 并发度 / 缓冲常量。
+    // 大段范围（≥ 32MB）走并行多 File handle，与 UI 下载共用阈值和缓冲常量。
     let body = if send_len >= crate::remote::PARALLEL_DOWNLOAD_THRESHOLD
         && crate::remote::PARALLEL_DOWNLOAD_PARTS >= 2
     {
@@ -526,7 +503,7 @@ pub async fn download_file(
         {
             Ok(stream) => Body::from_stream(stream),
             Err(e) => {
-                let elapsed = start.elapsed().as_millis() as u64;
+                let elapsed = elapsed_ms(start);
                 push_log(
                     &state,
                     "download",
@@ -538,29 +515,24 @@ pub async fn download_file(
                     elapsed,
                 )
                 .await;
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiError {
-                        error: format!("并行下载初始化失败: {}", e),
-                    }),
-                ));
+                return Err(internal_error(format!("并行下载初始化失败: {}", e)));
             }
         }
     } else {
         let mut remote_file = match sftp.open(query.path.clone()).await {
             Ok(f) => f,
             Err(e) => {
-                let elapsed = start.elapsed().as_millis() as u64;
+                let elapsed = elapsed_ms(start);
                 push_log(&state, "download", &friendly_error_detail(&format!("{} → {}", query.path, e), &state), false, elapsed).await;
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("打开远程文件失败: {}", e) })));
+                return Err(internal_error(format!("打开远程文件失败: {}", e)));
             }
         };
 
         if start_offset > 0 {
             if let Err(e) = remote_file.seek(std::io::SeekFrom::Start(start_offset)).await {
-                let elapsed = start.elapsed().as_millis() as u64;
+                let elapsed = elapsed_ms(start);
                 push_log(&state, "download", &friendly_error_detail(&format!("{} → seek {}: {}", query.path, start_offset, e), &state), false, elapsed).await;
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("seek 远程文件失败: {}", e) })));
+                return Err(internal_error(format!("seek 远程文件失败: {}", e)));
             }
         }
 
@@ -569,7 +541,7 @@ pub async fn download_file(
         Body::from_stream(stream)
     };
 
-    let elapsed = start.elapsed().as_millis() as u64;
+    let elapsed = elapsed_ms(start);
     let parallel_used = send_len >= crate::remote::PARALLEL_DOWNLOAD_THRESHOLD
         && crate::remote::PARALLEL_DOWNLOAD_PARTS >= 2;
     let log_detail = if status == StatusCode::PARTIAL_CONTENT {
@@ -604,9 +576,7 @@ pub async fn download_file(
             format!("bytes {}-{}/{}", start_offset, end_offset, total_size),
         );
     }
-    let mut response = builder.body(body).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("构建响应失败: {}", e) }))
-    })?;
+    let mut response = builder.body(body).map_err(|e| internal_error(format!("构建响应失败: {}", e)))?;
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
     }

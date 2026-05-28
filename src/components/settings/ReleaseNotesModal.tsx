@@ -1,6 +1,7 @@
 import { CloudDownloadOutlined, EyeInvisibleOutlined, RocketOutlined } from "@ant-design/icons";
 import { Button, Modal } from "antd";
 import type { ReactNode } from "react";
+import { formatBeijingDate } from "../../lib/format";
 import type { UpdateInfo } from "../../types";
 
 interface ReleaseNotesModalProps {
@@ -24,7 +25,7 @@ export function ReleaseNotesModal({ open, onClose, updateInfo, updateDownloading
           <span className="releaseNotesLabel">更新日志</span>
           <strong className="releaseNotesVersionTag">{updateInfo?.tagName || (updateInfo?.latestVersion ? `v${updateInfo.latestVersion}` : "--")}</strong>
         </div>
-        {updateInfo?.publishedAt ? <span className="releaseNotesDate">{formatReleaseDate(updateInfo.publishedAt)}</span> : null}
+        {updateInfo?.publishedAt ? <span className="releaseNotesDate">{formatBeijingDate(updateInfo.publishedAt)}</span> : null}
       </div>
       <div className="releaseNotesBody">{renderReleaseNotes(updateInfo)}</div>
       <div className="releaseNotesFooter">
@@ -37,12 +38,6 @@ export function ReleaseNotesModal({ open, onClose, updateInfo, updateDownloading
       </div>
     </Modal>
   );
-}
-
-function formatReleaseDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 type ReleaseNotesBlock = { type: "heading"; level: 2 | 3; text: string } | { type: "list"; items: string[] } | { type: "paragraph"; text: string };

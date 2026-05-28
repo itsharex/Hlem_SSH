@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { appApi } from "../api/appApi";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { readJsonStorage, writeJsonStorage } from "../lib/storage";
 import type { RemoteSession, TerminalEntry } from "../types";
 
 interface TerminalPanelProps {
@@ -798,11 +799,7 @@ function terminalBufferText(terminal: XtermTerminal) {
 const INPUT_HISTORY_STORAGE_KEY = "helm:terminalInputHistory";
 
 function loadInputHistory(): InputHistoryEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
+  return readJsonStorage<InputHistoryEntry[]>(INPUT_HISTORY_STORAGE_KEY, [], (parsed) => {
     if (!Array.isArray(parsed)) return [];
     const now = Date.now();
     if (parsed.every((item) => typeof item === "string")) {
@@ -819,18 +816,11 @@ function loadInputHistory(): InputHistoryEntry[] {
       .filter(isInputHistoryEntry)
       .sort((left, right) => left.timestamp - right.timestamp)
       .slice(-INPUT_HISTORY_LIMIT);
-  } catch {
-    return [];
-  }
+  });
 }
 
 function saveInputHistory(history: InputHistoryEntry[]) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(INPUT_HISTORY_STORAGE_KEY, JSON.stringify(history));
-  } catch {
-    /* localStorage 可能不可用（隐私模式、配额不足）；忽略 */
-  }
+  writeJsonStorage(INPUT_HISTORY_STORAGE_KEY, history);
 }
 
 function isInputHistoryEntry(item: unknown): item is InputHistoryEntry {

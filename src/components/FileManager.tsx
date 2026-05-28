@@ -16,6 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { writeClipboardText } from "../lib/clipboard";
 import { formatFileSize } from "../lib/format";
 import { getErrorMessage } from "../lib/configMapping";
+import { readJsonStorage, writeJsonStorage } from "../lib/storage";
 import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "../lib/editorChannel";
 import { getParentPath, joinPath, normalizePath } from "../lib/path";
 import { isTauriRuntime } from "../api/runtime";
@@ -112,11 +113,10 @@ const MIN_COLUMN_WIDTH = 64;
 const COLUMN_WIDTHS_KEY = "helm:fileColumnWidths";
 
 function loadColumnWidths(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(COLUMN_WIDTHS_KEY);
-    if (raw) return { ...DEFAULT_COLUMN_WIDTHS, ...JSON.parse(raw) };
-  } catch {}
-  return { ...DEFAULT_COLUMN_WIDTHS };
+  return readJsonStorage<Record<string, number>>(COLUMN_WIDTHS_KEY, { ...DEFAULT_COLUMN_WIDTHS }, (value) => {
+    if (!value || typeof value !== "object") return { ...DEFAULT_COLUMN_WIDTHS };
+    return { ...DEFAULT_COLUMN_WIDTHS, ...(value as Record<string, number>) };
+  });
 }
 
 let inMemoryColumnWidths: Record<string, number> = loadColumnWidths();
@@ -188,7 +188,7 @@ export function FileManager({
   useEffect(() => {
     columnWidthsRef.current = columnWidths;
     inMemoryColumnWidths = columnWidths;
-    try { localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(columnWidths)); } catch {}
+    writeJsonStorage(COLUMN_WIDTHS_KEY, columnWidths);
   }, [columnWidths]);
   const contentRef = useRef<HTMLDivElement>(null);
   const searchSeq = useRef(0);

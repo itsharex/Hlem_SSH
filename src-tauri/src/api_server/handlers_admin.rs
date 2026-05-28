@@ -35,6 +35,14 @@ fn lock_poisoned() -> (StatusCode, Json<ApiError>) {
     )
 }
 
+fn json_value(value: impl serde::Serialize) -> Json<JsonValue> {
+    Json(serde_json::to_value(value).unwrap_or_default())
+}
+
+fn elapsed_ms(start: std::time::Instant) -> u64 {
+    start.elapsed().as_millis() as u64
+}
+
 // ─── Tunnels ───────────────────────────────────────────────────────────────────
 
 /// `GET /api/tunnels` — 列出全部隧道配置。
@@ -49,8 +57,8 @@ pub async fn rest_tunnels_list(
         store.tunnels().map_err(map_err_500)?
     };
     let count = tunnels.len();
-    push_log(&state, "rest/tunnels.list", &format!("{} 项", count), true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(tunnels).unwrap_or_default()))
+    push_log(&state, "rest/tunnels.list", &format!("{} 项", count), true, elapsed_ms(start)).await;
+    Ok(json_value(tunnels))
 }
 
 /// `POST /api/tunnels` body: TunnelInput → 创建后返回隧道数组。
@@ -65,8 +73,8 @@ pub async fn rest_tunnels_create(
         let mut store = state.vault.lock().map_err(|_| lock_poisoned())?;
         store.create_tunnel(input).map_err(map_err_500)?
     };
-    push_log(&state, "rest/tunnels.create", "OK", true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(snapshot.data.tunnels).unwrap_or_default()))
+    push_log(&state, "rest/tunnels.create", "OK", true, elapsed_ms(start)).await;
+    Ok(json_value(snapshot.data.tunnels))
 }
 
 /// `PATCH /api/tunnels/:tunnelId` body: TunnelInput → 更新后返回隧道数组。
@@ -82,8 +90,8 @@ pub async fn rest_tunnels_update(
         let mut store = state.vault.lock().map_err(|_| lock_poisoned())?;
         store.update_tunnel(&tunnel_id, input).map_err(map_err_500)?
     };
-    push_log(&state, "rest/tunnels.update", &tunnel_id, true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(snapshot.data.tunnels).unwrap_or_default()))
+    push_log(&state, "rest/tunnels.update", &tunnel_id, true, elapsed_ms(start)).await;
+    Ok(json_value(snapshot.data.tunnels))
 }
 
 /// `DELETE /api/tunnels/:tunnelId` → 删除后返回隧道数组。
@@ -98,8 +106,8 @@ pub async fn rest_tunnels_delete(
         let mut store = state.vault.lock().map_err(|_| lock_poisoned())?;
         store.delete_tunnel(&tunnel_id).map_err(map_err_500)?
     };
-    push_log(&state, "rest/tunnels.delete", &tunnel_id, true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(snapshot.data.tunnels).unwrap_or_default()))
+    push_log(&state, "rest/tunnels.delete", &tunnel_id, true, elapsed_ms(start)).await;
+    Ok(json_value(snapshot.data.tunnels))
 }
 
 /// `POST /api/tunnels/:tunnelId/start` → `{forwardId, bindHost, bindPort}`。
@@ -128,7 +136,7 @@ pub async fn rest_tunnels_start(
         .api_start_tunnel(&tunnel)
         .await
         .map_err(map_err_500)?;
-    push_log(&state, "rest/tunnels.start", &tunnel_id, true, start.elapsed().as_millis() as u64).await;
+    push_log(&state, "rest/tunnels.start", &tunnel_id, true, elapsed_ms(start)).await;
     Ok(Json(serde_json::json!({
         "forwardId": forward_id,
         "bindHost": bind_host,
@@ -149,7 +157,7 @@ pub async fn rest_tunnels_stop(
         .api_stop_tunnel(&tunnel_id)
         .await
         .map_err(map_err_500)?;
-    push_log(&state, "rest/tunnels.stop", &tunnel_id, true, start.elapsed().as_millis() as u64).await;
+    push_log(&state, "rest/tunnels.stop", &tunnel_id, true, elapsed_ms(start)).await;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -163,7 +171,7 @@ pub async fn rest_backup_settings_get(
     require_auth(&state, &headers).await?;
     let store = state.vault.lock().map_err(|_| lock_poisoned())?;
     let snap = store.snapshot().map_err(map_err_500)?;
-    Ok(Json(serde_json::to_value(snap.data.settings.backup).unwrap_or_default()))
+    Ok(json_value(snap.data.settings.backup))
 }
 
 /// `PUT /api/backup/settings` body: BackupSettings → 写入后返回备份设置。
@@ -181,8 +189,8 @@ pub async fn rest_backup_settings_update(
         settings.backup = backup.clone();
         store.settings_update(settings).map_err(map_err_500)?;
     }
-    push_log(&state, "rest/backup.settings.update", "OK", true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(backup).unwrap_or_default()))
+    push_log(&state, "rest/backup.settings.update", "OK", true, elapsed_ms(start)).await;
+    Ok(json_value(backup))
 }
 
 /// `GET /api/backup/records` → 备份记录数组。
@@ -193,7 +201,7 @@ pub async fn rest_backup_records_list(
     require_auth(&state, &headers).await?;
     let store = state.vault.lock().map_err(|_| lock_poisoned())?;
     let snap = store.snapshot().map_err(map_err_500)?;
-    Ok(Json(serde_json::to_value(snap.data.backup_records).unwrap_or_default()))
+    Ok(json_value(snap.data.backup_records))
 }
 
 /// `POST /api/backup/run` → 立即执行一次备份并返回本次结果数组。
@@ -206,59 +214,24 @@ pub async fn rest_backup_run(
     require_auth(&state, &headers).await?;
     let start = std::time::Instant::now();
 
-    let (settings, vault_path, file_name) = {
+    let plan = {
         let store = state.vault.lock().map_err(|_| lock_poisoned())?;
-        store.ensure_unlocked().map_err(map_err_500)?;
-        let snap = store.snapshot().map_err(map_err_500)?;
-        (
-            snap.data.settings.backup,
-            store.vault_file_path(),
-            crate::backup::backup_file_name(),
-        )
+        crate::backup::prepare_backup_run(&store).map_err(map_err_500)?
     };
-    let bytes = tokio::fs::read(&vault_path).await.map_err(map_err_500)?;
-    let package = crate::backup::build_backup_package(bytes).await.map_err(map_err_500)?;
-    let size = package.len() as u64;
-    let has_local = settings
-        .local_directory
-        .as_deref()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    if !has_local && !settings.cloud.enabled {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "请先配置本地备份目录或启用云端备份".into(),
-            }),
-        ));
+    let outcomes = crate::backup::run_configured_backup(&plan)
+        .await
+        .map_err(map_err_500)?;
+    let records = crate::backup::merge_configured_backup_records(&plan.settings, outcomes.clone()).await;
+    let delete_paths = {
+        let mut store = state.vault.lock().map_err(|_| lock_poisoned())?;
+        let (_, delete_paths) = store.replace_backup_records(records).map_err(map_err_500)?;
+        delete_paths
+    };
+    for path in delete_paths {
+        let _ = tokio::fs::remove_file(path).await;
     }
-    let mut outcomes = Vec::new();
-    if has_local {
-        let dir = std::path::PathBuf::from(settings.local_directory.as_deref().unwrap().trim());
-        let target = dir.join(&file_name);
-        let write_result = async {
-            tokio::fs::create_dir_all(&dir).await?;
-            tokio::fs::write(&target, &package).await?;
-            Ok::<(), std::io::Error>(())
-        }
-        .await;
-        match write_result {
-            Ok(()) => outcomes.push(crate::config::BackupRecord::success(
-                file_name.clone(),
-                "local",
-                target.to_string_lossy().to_string(),
-                size,
-            )),
-            Err(e) => outcomes.push(crate::config::BackupRecord::failed(
-                file_name.clone(),
-                "local",
-                target.to_string_lossy().to_string(),
-                e.to_string(),
-            )),
-        }
-    }
-    push_log(&state, "rest/backup.run", "OK", true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(outcomes).unwrap_or_default()))
+    push_log(&state, "rest/backup.run", "OK", true, elapsed_ms(start)).await;
+    Ok(json_value(outcomes))
 }
 
 #[derive(Deserialize)]
@@ -286,6 +259,6 @@ pub async fn rest_backup_record_delete(
     if let Some(path) = delete_path {
         let _ = tokio::fs::remove_file(path).await;
     }
-    push_log(&state, "rest/backup.record.delete", &record_id, true, start.elapsed().as_millis() as u64).await;
-    Ok(Json(serde_json::to_value(snap.data.backup_records).unwrap_or_default()))
+    push_log(&state, "rest/backup.record.delete", &record_id, true, elapsed_ms(start)).await;
+    Ok(json_value(snap.data.backup_records))
 }

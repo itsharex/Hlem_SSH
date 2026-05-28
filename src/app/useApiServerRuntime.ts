@@ -1,0 +1,33 @@
+import { useState, type MutableRefObject } from "react";
+import { appApi } from "../api/appApi";
+import type { ConfigSnapshot } from "../types";
+
+export function useApiServerRuntime(configSnapshotRef: MutableRefObject<ConfigSnapshot | undefined>) {
+  const [apiServerRunning, setApiServerRunning] = useState(false);
+
+  async function initializeApiServerRuntime() {
+    try {
+      const status = await appApi.apiServerStatus();
+      setApiServerRunning(status.running);
+      if (status.running) return;
+
+      const settings = configSnapshotRef.current?.data.settings;
+      if (!settings?.aiApiAutoStart || !settings.aiApiSessionId || !settings.aiApiPort) return;
+
+      try {
+        const info = await appApi.apiServerStart(settings.aiApiPort, settings.aiApiSessionId);
+        setApiServerRunning(info.running);
+      } catch {
+        // 自动启动失败不影响主流程。
+      }
+    } catch {
+      // API 状态查询失败不影响主流程。
+    }
+  }
+
+  return {
+    apiServerRunning,
+    setApiServerRunning,
+    initializeApiServerRuntime,
+  };
+}

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, BackupSettings, ConfigSnapshot, GroupInput, SessionInput, SshOptions, TunnelConfig, TunnelInput, VaultData } from "../types";
 import { isTauriRuntime } from "./runtime";
+import { readJsonStorage, removeStorage, writeJsonStorage } from "../lib/storage";
 
 const BROWSER_VAULT_KEY = "helm.browserVault";
 
@@ -53,8 +54,7 @@ function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: 
 let browserUnlocked: ConfigSnapshot | null = null;
 
 function browserSkipMigration(): ConfigSnapshot {
-  // In browser mode, just reset to fresh state
-  localStorage.removeItem(BROWSER_VAULT_KEY);
+  removeStorage(BROWSER_VAULT_KEY);
   browserUnlocked = null;
   return requireBrowserUnlocked();
 }
@@ -69,9 +69,7 @@ function browserUnavailable(capability: string): never {
 
 function browserSettingsUpdate(settings: AppSettings): ConfigSnapshot {
   return browserMutate((data) => {
-    settings.backup ??= defaultBackupSettings();
-    settings.quickCommands ??= [];
-    data.settings = settings;
+    data.settings = normalizeBrowserSettings(settings);
   });
 }
 
@@ -242,32 +240,68 @@ function requireBrowserUnlocked(): ConfigSnapshot {
 }
 
 function readBrowserRecord(): ConfigSnapshot | null {
-  const content = localStorage.getItem(BROWSER_VAULT_KEY);
-  if (!content) return null;
-  const record = JSON.parse(content) as ConfigSnapshot | { masterPassword: string; snapshot: ConfigSnapshot };
-  // Handle legacy format with masterPassword wrapper
-  const snapshot = "snapshot" in record ? record.snapshot : record;
+  const snapshot = readJsonStorage<ConfigSnapshot | null>(BROWSER_VAULT_KEY, null, (record) => {
+    if (!record || typeof record !== "object") return null;
+    return "snapshot" in record ? (record.snapshot as ConfigSnapshot) : (record as ConfigSnapshot);
+  });
+  if (!snapshot) return null;
   normalizeBrowserSnapshot(snapshot);
   return snapshot;
 }
 
 function writeBrowserRecord(snapshot: ConfigSnapshot) {
   normalizeBrowserSnapshot(snapshot);
-  localStorage.setItem(BROWSER_VAULT_KEY, JSON.stringify(snapshot));
+  writeJsonStorage(BROWSER_VAULT_KEY, snapshot);
 }
 
 function normalizeBrowserSnapshot(snapshot: ConfigSnapshot) {
   snapshot.data.knownHosts ??= [];
-  snapshot.data.settings ??= { proxy: null, backup: defaultBackupSettings() };
-  snapshot.data.settings.backup ??= defaultBackupSettings();
-  snapshot.data.settings.quickCommands ??= [];
-  snapshot.data.settings.ignoredUpdateVersions ??= [];
+  snapshot.data.settings = normalizeBrowserSettings(snapshot.data.settings);
   snapshot.data.tunnels ??= [];
   snapshot.data.backupRecords ??= [];
   snapshot.data.sessions = snapshot.data.sessions.map((session) => ({
     ...session,
+    auth: session.auth ?? emptyPasswordAuth(),
     ssh: session.ssh ?? defaultSshOptions(),
+    terminal: session.terminal ?? defaultTerminalOptions(),
+    sftp: session.sftp ?? defaultSftpOptions(),
+    tags: session.tags ?? [],
   }));
+}
+
+function normalizeBrowserSettings(settings?: AppSettings | null): AppSettings {
+  return {
+    proxy: settings?.proxy ?? null,
+    backup: normalizeBackupSettings(settings?.backup),
+    quickCommands: settings?.quickCommands ?? [],
+    terminalInputHistory: settings?.terminalInputHistory ?? [],
+    ignoredUpdateVersions: settings?.ignoredUpdateVersions ?? [],
+    aiApiKey: settings?.aiApiKey ?? null,
+    aiApiSessionId: settings?.aiApiSessionId ?? null,
+    aiApiPort: settings?.aiApiPort ?? null,
+    aiApiAutoStart: settings?.aiApiAutoStart ?? false,
+  };
+}
+
+function normalizeBackupSettings(settings?: BackupSettings | null): BackupSettings {
+  const defaults = defaultBackupSettings();
+  return {
+    ...defaults,
+    ...settings,
+    localDirectory: settings?.localDirectory ?? null,
+    cloud: {
+      ...defaults.cloud,
+      ...settings?.cloud,
+      webdav: {
+        ...defaults.cloud.webdav,
+        ...settings?.cloud?.webdav,
+      },
+      s3: {
+        ...defaults.cloud.s3,
+        ...settings?.cloud?.s3,
+      },
+    },
+  };
 }
 
 function createDefaultVaultData(): VaultData {
@@ -277,7 +311,7 @@ function createDefaultVaultData(): VaultData {
     version: 1,
     updatedAt: timestamp,
     knownHosts: [],
-    settings: { proxy: null, backup: defaultBackupSettings(), quickCommands: [], ignoredUpdateVersions: [] },
+    settings: normalizeBrowserSettings(),
     tunnels: [],
     backupRecords: [],
     groups: [
