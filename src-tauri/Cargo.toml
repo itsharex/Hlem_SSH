@@ -1,6 +1,6 @@
 [package]
 name = "helm"
-version = "0.0.33"
+version = "0.0.34"
 description = "A Tauri SSH and SFTP desktop workbench prototype"
 authors = ["HelM"]
 edition = "2021"

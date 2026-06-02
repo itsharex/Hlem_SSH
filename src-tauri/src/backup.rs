@@ -1,7 +1,7 @@
 use std::{
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
@@ -20,12 +20,15 @@ use crate::{
         BackupRecord, BackupSettings, CloudBackupSettings, S3BackupConfig, WebdavBackupConfig,
     },
     errors::{AppError, AppResult},
+    http_client::{http_client, send_with_retry},
     vault::VaultStore,
 };
 
 type HmacSha256 = Hmac<Sha256>;
 const BACKUP_PAYLOAD_NAME: &str = "vault.rpvault";
 const BACKUP_MANIFEST_NAME: &str = "manifest.json";
+const CLOUD_LIST_TIMEOUT: Duration = Duration::from_secs(30);
+const CLOUD_TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub fn backup_file_name() -> String {
     let beijing = FixedOffset::east_opt(8 * 3600)
@@ -80,7 +83,9 @@ pub async fn run_configured_backup(plan: &BackupRunPlan) -> AppResult<Vec<Backup
         outcomes.push(write_local_backup(&directory, &plan.file_name, &package, size).await);
     }
     if plan.settings.cloud.enabled {
-        outcomes.push(upload_cloud_backup(&plan.settings.cloud, &plan.file_name, package.clone()).await);
+        outcomes.push(
+            upload_cloud_backup(&plan.settings.cloud, &plan.file_name, package.clone()).await,
+        );
     }
     if outcomes.is_empty() {
         return Err(AppError::InvalidInput(
@@ -244,19 +249,15 @@ pub async fn download_cloud_backup(
 pub async fn list_configured_backup_records(
     settings: &BackupSettings,
 ) -> AppResult<Vec<BackupRecord>> {
-    let local_directory = settings.local_directory.clone();
+    let local_directory = configured_local_backup_directory(settings);
     let cloud = settings.cloud.clone();
-    let local_enabled = local_directory
-        .as_deref()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
     let cloud_enabled = cloud.enabled;
 
     let local_list = async move {
-        if !local_enabled {
-            return Ok(Vec::new());
+        match local_directory {
+            Some(directory) => list_local_backup_records(directory).await,
+            None => Ok(Vec::new()),
         }
-        list_local_backup_records(PathBuf::from(local_directory.unwrap().trim())).await
     };
     let cloud_list = async move {
         if !cloud_enabled {
@@ -326,12 +327,18 @@ async fn upload_webdav(
     bytes: Vec<u8>,
 ) -> AppResult<String> {
     let target = join_remote_url(&config.endpoint, &config.remote_path, file_name)?;
-    let client = reqwest::Client::new();
-    let mut request = client.put(&target).body(bytes);
-    if !config.username.trim().is_empty() {
-        request = request.basic_auth(config.username.trim(), Some(config.password.clone()));
-    }
-    let response = request.send().await.map_err(remote_error)?;
+    let client = http_client(CLOUD_TRANSFER_TIMEOUT)?;
+    let username = config.username.trim().to_string();
+    let password = config.password.clone();
+    let response = send_with_retry("WebDAV 上传", || {
+        let request = client.put(&target).body(bytes.clone());
+        if username.is_empty() {
+            request
+        } else {
+            request.basic_auth(username.clone(), Some(password.clone()))
+        }
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "WebDAV 上传失败: HTTP {}",
@@ -342,12 +349,19 @@ async fn upload_webdav(
 }
 
 async fn download_webdav(config: &WebdavBackupConfig, target: &str) -> AppResult<Vec<u8>> {
-    let client = reqwest::Client::new();
-    let mut request = client.get(target.trim());
-    if !config.username.trim().is_empty() {
-        request = request.basic_auth(config.username.trim(), Some(config.password.clone()));
-    }
-    let response = request.send().await.map_err(remote_error)?;
+    let client = http_client(CLOUD_TRANSFER_TIMEOUT)?;
+    let target = target.trim().to_string();
+    let username = config.username.trim().to_string();
+    let password = config.password.clone();
+    let response = send_with_retry("WebDAV 下载", || {
+        let request = client.get(&target);
+        if username.is_empty() {
+            request
+        } else {
+            request.basic_auth(username.clone(), Some(password.clone()))
+        }
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "WebDAV 下载失败: HTTP {}",
@@ -363,17 +377,23 @@ async fn download_webdav(config: &WebdavBackupConfig, target: &str) -> AppResult
 
 async fn list_webdav_backups(config: &WebdavBackupConfig) -> AppResult<Vec<BackupRecord>> {
     let target = webdav_collection_url(&config.endpoint, &config.remote_path)?;
-    let client = reqwest::Client::new();
+    let client = http_client(CLOUD_LIST_TIMEOUT)?;
     let method =
         Method::from_bytes(b"PROPFIND").map_err(|error| AppError::Remote(error.to_string()))?;
-    let mut request = client
-        .request(method, &target)
-        .header("Depth", "1")
-        .body(r#"<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getcontentlength/><getlastmodified/></prop></propfind>"#);
-    if !config.username.trim().is_empty() {
-        request = request.basic_auth(config.username.trim(), Some(config.password.clone()));
-    }
-    let response = request.send().await.map_err(remote_error)?;
+    let username = config.username.trim().to_string();
+    let password = config.password.clone();
+    let response = send_with_retry("WebDAV 列表读取", || {
+        let request = client
+            .request(method.clone(), &target)
+            .header("Depth", "1")
+            .body(r#"<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getcontentlength/><getlastmodified/></prop></propfind>"#);
+        if username.is_empty() {
+            request
+        } else {
+            request.basic_auth(username.clone(), Some(password.clone()))
+        }
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "WebDAV 列表读取失败: HTTP {}",
@@ -466,13 +486,14 @@ async fn upload_s3(config: &S3BackupConfig, file_name: &str, bytes: Vec<u8>) -> 
             .map_err(|error| AppError::Remote(error.to_string()))?,
     );
 
-    let response = reqwest::Client::new()
-        .put(url.as_str())
-        .headers(headers)
-        .body(bytes)
-        .send()
-        .await
-        .map_err(remote_error)?;
+    let client = http_client(CLOUD_TRANSFER_TIMEOUT)?;
+    let response = send_with_retry("S3 上传", || {
+        client
+            .put(url.as_str())
+            .headers(headers.clone())
+            .body(bytes.clone())
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "S3 上传失败: HTTP {}",
@@ -535,12 +556,11 @@ async fn download_s3(config: &S3BackupConfig, target_path: &str) -> AppResult<Ve
             .map_err(|error| AppError::Remote(error.to_string()))?,
     );
 
-    let response = reqwest::Client::new()
-        .get(url.as_str())
-        .headers(headers)
-        .send()
-        .await
-        .map_err(remote_error)?;
+    let client = http_client(CLOUD_TRANSFER_TIMEOUT)?;
+    let response = send_with_retry("S3 下载", || {
+        client.get(url.as_str()).headers(headers.clone())
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "S3 下载失败: HTTP {}",
@@ -616,12 +636,11 @@ async fn list_s3_backups(config: &S3BackupConfig) -> AppResult<Vec<BackupRecord>
             .map_err(|error| AppError::Remote(error.to_string()))?,
     );
 
-    let response = reqwest::Client::new()
-        .get(url.as_str())
-        .headers(headers)
-        .send()
-        .await
-        .map_err(remote_error)?;
+    let client = http_client(CLOUD_LIST_TIMEOUT)?;
+    let response = send_with_retry("S3 列表读取", || {
+        client.get(url.as_str()).headers(headers.clone())
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "S3 列表读取失败: HTTP {}",
@@ -993,9 +1012,12 @@ mod tests {
         let backup_dir = dir.path().join("backups");
         tokio::fs::create_dir_all(&backup_dir).await.unwrap();
         let existing_path = backup_dir.join("HelM-backup-old-BJT.zip");
-        tokio::fs::write(&existing_path, build_backup_package(b"vault".to_vec()).await.unwrap())
-            .await
-            .unwrap();
+        tokio::fs::write(
+            &existing_path,
+            build_backup_package(b"vault".to_vec()).await.unwrap(),
+        )
+        .await
+        .unwrap();
         let settings = BackupSettings {
             local_directory: Some(backup_dir.to_string_lossy().to_string()),
             ..BackupSettings::default()
@@ -1009,7 +1031,10 @@ mod tests {
         let failed = BackupRecord::failed(
             "HelM-backup-new-BJT.zip".to_string(),
             "local",
-            backup_dir.join("HelM-backup-new-BJT.zip").to_string_lossy().to_string(),
+            backup_dir
+                .join("HelM-backup-new-BJT.zip")
+                .to_string_lossy()
+                .to_string(),
             "disk full".to_string(),
         );
 

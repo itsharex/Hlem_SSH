@@ -39,6 +39,7 @@ import { searchKeymap } from "@codemirror/search";
 import { Button, Input, Space, Tooltip } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { useTimeoutRegistry } from "../lib/reactLifecycle";
 
 interface CodeEditorProps {
   path: string;
@@ -71,6 +72,7 @@ export function CodeEditor({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [copied, setCopied] = useState(false);
+  const setSafeTimeout = useTimeoutRegistry();
   const largeDocument = useMemo(() => isLargeDocument(value), [value]);
 
   useEffect(() => {
@@ -157,7 +159,7 @@ export function CodeEditor({
       selection: EditorSelection.cursor(selection.from + replacement.length),
     });
     onChange(view.state.doc.toString());
-    window.setTimeout(() => findNext(1), 0);
+    setSafeTimeout(() => findNext(1), 0);
   }
 
   function replaceAll() {
@@ -397,7 +399,7 @@ export function CodeEditor({
               onClick={() => {
                 void navigator.clipboard.writeText(value ?? "").then(() => {
                   setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
+                  setSafeTimeout(() => setCopied(false), 1500);
                 });
               }}
             />

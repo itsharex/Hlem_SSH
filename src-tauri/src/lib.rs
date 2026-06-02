@@ -5,17 +5,18 @@ mod config;
 mod crypto;
 mod errors;
 mod events;
+mod http_client;
 mod remote;
 mod vault;
 
 use commands::{
-    api_server_regenerate_key, api_server_start, api_server_status, api_server_stop,
-    api_server_logs, app_info, backup_record_delete,
-    backup_record_restore, backup_records_clear, backup_run_now, config_snapshot, download_update,
-    fetch_text_url, forward_list, forward_start_dynamic, forward_start_local,
-    forward_start_remote, forward_stop, group_create, group_delete, group_update, install_update,
-    local_expand_paths, open_database_dir, open_external_url, open_log_dir, open_path_dir, resolve_vault_path,
-    session_create, session_delete, session_duplicate, session_update, settings_update, sftp_copy,
+    api_server_logs, api_server_regenerate_key, api_server_start, api_server_status,
+    api_server_stop, app_info, backup_record_delete, backup_record_restore, backup_records_clear,
+    backup_run_now, config_snapshot, download_update, fetch_text_url, forward_list,
+    forward_start_dynamic, forward_start_local, forward_start_remote, forward_stop, group_create,
+    group_delete, group_update, install_update, local_expand_paths, open_database_dir,
+    open_external_url, open_log_dir, open_path_dir, resolve_vault_path, session_create,
+    session_delete, session_duplicate, session_update, settings_update, sftp_copy,
     sftp_create_file, sftp_delete, sftp_list, sftp_mkdir, sftp_open, sftp_read_text, sftp_rename,
     sftp_search, sftp_write_text, ssh_connect, ssh_disconnect, ssh_exec, ssh_exec_on_connection,
     ssh_trust_host_key, telemetry_snapshot, telemetry_start, telemetry_stop, terminal_close,

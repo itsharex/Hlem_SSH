@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { defaultBackupSettings, vaultApi } from "../api/vaultApi";
 import { shouldRunAutoBackup } from "./appHelpers";
+import { useMountedRef } from "../lib/reactLifecycle";
 import type { AppSettings, ConfigSnapshot } from "../types";
 
 type UseBackupWorkflowOptions = {
@@ -23,6 +24,7 @@ export function useBackupWorkflow({
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const autoBackupRunningRef = useRef(false);
+  const mountedRef = useMountedRef();
 
   useEffect(() => {
     const snapshot = configSnapshot;
@@ -65,16 +67,18 @@ export function useBackupWorkflow({
     setBackupBusy(true);
     try {
       const snapshot = await loader();
+      if (!mountedRef.current) return;
       resetRuntimeState();
       applySnapshot(snapshot, undefined, false);
       setBackupOpen(false);
     } finally {
-      setBackupBusy(false);
+      if (mountedRef.current) setBackupBusy(false);
     }
   }
 
   async function saveBackupSettings(settings: AppSettings) {
     const snapshot = await vaultApi.settingsUpdate(settings);
+    if (!mountedRef.current) return;
     applyConfigSnapshot(snapshot);
   }
 
@@ -84,15 +88,17 @@ export function useBackupWorkflow({
     if (showBusy) setBackupBusy(true);
     try {
       const snapshot = await vaultApi.backupRunNow();
+      if (!mountedRef.current) return;
       applyConfigSnapshot(snapshot);
     } finally {
       autoBackupRunningRef.current = false;
-      if (showBusy) setBackupBusy(false);
+      if (showBusy && mountedRef.current) setBackupBusy(false);
     }
   }
 
   async function deleteBackupRecord(recordId: string, deleteFile: boolean) {
     const snapshot = await vaultApi.backupRecordDelete(recordId, deleteFile);
+    if (!mountedRef.current) return;
     applyConfigSnapshot(snapshot);
   }
 

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { appApi } from "../api/appApi";
 import { defaultBackupSettings, vaultApi } from "../api/vaultApi";
 import { getErrorMessage } from "../lib/configMapping";
+import { useMountedRef } from "../lib/reactLifecycle";
 import type { AppInfo, ConfigSnapshot, UpdateInfo } from "../types";
 
 type UseAppUpdaterOptions = {
@@ -27,6 +28,7 @@ export function useAppUpdater({
   const [downloadedUpdatePath, setDownloadedUpdatePath] = useState<string | null>(null);
   const autoUpdateTimerRef = useRef<number | null>(null);
   const autoUpdateScheduledRef = useRef(false);
+  const mountedRef = useMountedRef();
 
   useEffect(() => {
     return () => {
@@ -52,6 +54,7 @@ export function useAppUpdater({
 
   async function checkForUpdate(manual = true, knownInfo = appInfo) {
     const info = knownInfo ?? (await appApi.info());
+    if (!mountedRef.current) return;
     setAppInfo(info);
     if (!appApi.updateRepo()) {
       if (manual) Modal.warning({ title: "未配置更新源", content: "发布版会由 GitHub Actions 自动写入更新仓库地址。" });
@@ -63,6 +66,7 @@ export function useAppUpdater({
     }
     try {
       const next = await appApi.checkUpdate(info.version, info.arch);
+      if (!mountedRef.current) return;
       if (!next) {
         setUpdateInfo(next);
         return;
@@ -73,13 +77,13 @@ export function useAppUpdater({
     } catch (error) {
       const message = getErrorMessage(error);
       if (manual) {
-        setUpdateError(message);
+        if (mountedRef.current) setUpdateError(message);
         Modal.error({ title: "检查更新失败", content: message });
       } else {
         console.warn("[helm] auto update check failed:", message);
       }
     } finally {
-      if (manual) setUpdateChecking(false);
+      if (manual && mountedRef.current) setUpdateChecking(false);
     }
   }
 
@@ -88,11 +92,12 @@ export function useAppUpdater({
     setUpdateDownloading(true);
     try {
       const path = await appApi.downloadSignedUpdate(target.asset.downloadUrl, target.asset.name, target.asset.sha256);
+      if (!mountedRef.current) return;
       setDownloadedUpdatePath(path);
     } catch (error) {
       Modal.error({ title: "下载更新失败", content: getErrorMessage(error) });
     } finally {
-      setUpdateDownloading(false);
+      if (mountedRef.current) setUpdateDownloading(false);
     }
   }
 
@@ -121,6 +126,7 @@ export function useAppUpdater({
         backup: snapshot.data.settings.backup ?? defaultBackupSettings(),
         ignoredUpdateVersions: [...previous, candidate],
       });
+      if (!mountedRef.current) return;
       applyConfigSnapshot(next);
       setUpdateInfo({ ...target, hasUpdate: false });
     } catch (error) {

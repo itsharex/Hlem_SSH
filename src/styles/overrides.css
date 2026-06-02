@@ -267,6 +267,12 @@
   transition: all .2s cubic-bezier(.4, 0, .2, 1) !important;
 }
 
+.commandDialogModal .ant-input-affix-wrapper .ant-input {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 .commandDialogModal .ant-input:hover,
 .commandDialogModal .ant-input-affix-wrapper:hover {
   border-color: rgba(99, 102, 241, .4) !important;

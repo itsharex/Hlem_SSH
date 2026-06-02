@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { clamp } from "../lib/math";
 
 interface SplitPaneProps {
@@ -19,6 +19,14 @@ export function SplitPane({
   const containerRef = useRef<HTMLDivElement>(null);
   const [topHeight, setTopHeight] = useState(defaultTopHeight);
   const initializedRef = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+      dragCleanupRef.current = null;
+    };
+  }, []);
 
   const clampTopHeight = useCallback(
     (value: number, containerHeight: number) => {
@@ -51,6 +59,7 @@ export function SplitPane({
   const startDrag = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+    dragCleanupRef.current?.();
 
     const bounds = container.getBoundingClientRect();
 
@@ -62,11 +71,13 @@ export function SplitPane({
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", stopDrag);
       document.body.classList.remove("isResizing");
+      dragCleanupRef.current = null;
     };
 
     document.body.classList.add("isResizing");
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", stopDrag);
+    dragCleanupRef.current = stopDrag;
   }, [clampTopHeight]);
 
   return (

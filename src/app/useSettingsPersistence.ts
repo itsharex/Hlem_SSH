@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { defaultBackupSettings, vaultApi } from "../api/vaultApi";
+import { useMountedRef } from "../lib/reactLifecycle";
 import type { MutableRefObject } from "react";
 import type { AppSettings, ConfigSnapshot } from "../types";
 
@@ -17,6 +18,7 @@ export function useSettingsPersistence({
   onSettingsSaved,
 }: UseSettingsPersistenceOptions) {
   const inputHistorySaveTimerRef = useRef<number | null>(null);
+  const mountedRef = useMountedRef();
 
   useEffect(() => {
     return () => {
@@ -28,6 +30,7 @@ export function useSettingsPersistence({
 
   async function saveSettings(settings: AppSettings) {
     const snapshot = await vaultApi.settingsUpdate(settings);
+    if (!mountedRef.current) return;
     applyConfigSnapshot(snapshot);
     onSettingsSaved();
   }
@@ -39,6 +42,7 @@ export function useSettingsPersistence({
       backup: configSnapshot.data.settings.backup ?? defaultBackupSettings(),
       quickCommands: nextCommands ?? [],
     });
+    if (!mountedRef.current) return;
     applyConfigSnapshot(snapshot);
   }
 
@@ -54,7 +58,9 @@ export function useSettingsPersistence({
         ...snapshot.data.settings,
         backup: snapshot.data.settings.backup ?? defaultBackupSettings(),
         terminalInputHistory: history ?? [],
-      }).then(applyConfigSnapshot).catch(() => undefined);
+      }).then((snapshot) => {
+        if (mountedRef.current) applyConfigSnapshot(snapshot);
+      }).catch(() => undefined);
     }, 800);
   }
 

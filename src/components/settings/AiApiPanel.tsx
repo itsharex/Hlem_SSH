@@ -6,6 +6,7 @@ import { appApi, type ApiServerInfo, type ApiLogEntry } from "../../api/appApi";
 import { appEvents } from "../../api/appEvents";
 import { vaultApi } from "../../api/vaultApi";
 import { buildApiDoc } from "../../lib/apiDocTemplate";
+import { useMountedRef, useTimeoutRegistry } from "../../lib/reactLifecycle";
 
 interface AiApiPanelProps {
   open: boolean;
@@ -22,6 +23,8 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
   const [aiApiPort, setAiApiPort] = useState(() => initialValue.aiApiPort ?? 19880);
   const [aiApiCopied, setAiApiCopied] = useState(false);
   const [aiApiAutoStart, setAiApiAutoStart] = useState(() => initialValue.aiApiAutoStart ?? false);
+  const mountedRef = useMountedRef();
+  const setSafeTimeout = useTimeoutRegistry();
   const [aiApiSessionId, setAiApiSessionId] = useState<string | null>(() => {
     const saved = initialValue.aiApiSessionId ?? null;
     if (saved && sessions.some((s) => s.id === saved)) return saved;
@@ -38,10 +41,12 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
 
   useEffect(() => {
     if (!open) return;
-    void appApi.apiServerLogs().then(setAiApiLogs).catch(() => undefined);
-    void refreshAiApiStatus();
     let mounted = true;
     let unlisten: (() => void) | null = null;
+    void appApi.apiServerLogs().then((items) => {
+      if (mounted) setAiApiLogs(items);
+    }).catch(() => undefined);
+    void refreshAiApiStatus();
     void appEvents.onApiLog((entry) => {
       if (!mounted) return;
       setAiApiLogs((prev) => {
@@ -58,36 +63,40 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
   async function refreshAiApiStatus() {
     try {
       const info = await appApi.apiServerStatus();
+      if (!mountedRef.current) return;
       setAiApiInfo(info);
       onApiServerChange(info.running);
       if (info.running && info.port) setAiApiPort(info.port);
-    } catch { setAiApiInfo(null); }
+    } catch { if (mountedRef.current) setAiApiInfo(null); }
   }
 
   async function startAiApi() {
     setAiApiLoading(true);
     try {
       const info = await appApi.apiServerStart(aiApiPort, aiApiSessionId);
+      if (!mountedRef.current) return;
       setAiApiInfo(info);
       onApiServerChange(true);
       await persistAiApiSettings({ aiApiKey: info.apiKey, aiApiPort: info.port || aiApiPort, aiApiSessionId, aiApiAutoStart }).catch(() => undefined);
     } catch (error) { Modal.error({ title: "启动 API 服务失败", content: String(error) }); }
-    finally { setAiApiLoading(false); }
+    finally { if (mountedRef.current) setAiApiLoading(false); }
   }
 
   async function stopAiApi() {
     setAiApiLoading(true);
     try {
       await appApi.apiServerStop();
+      if (!mountedRef.current) return;
       setAiApiInfo({ running: false, port: 0, apiKey: "" });
       onApiServerChange(false);
     } catch (error) { Modal.error({ title: "停止 API 服务失败", content: String(error) }); }
-    finally { setAiApiLoading(false); }
+    finally { if (mountedRef.current) setAiApiLoading(false); }
   }
 
   async function regenerateKey() {
     try {
       const info = await appApi.apiServerRegenerateKey();
+      if (!mountedRef.current) return;
       setAiApiInfo(info);
       message.success("API Key 已重新生成");
     } catch (error) { Modal.error({ title: "重新生成密钥失败", content: String(error) }); }
@@ -103,6 +112,7 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
       try {
         await appApi.apiServerStop();
         const info = await appApi.apiServerStart(aiApiPort, sessionId);
+        if (!mountedRef.current) return;
         setAiApiInfo(info);
         const sessionName = sessions.find((s) => s.id === sessionId)?.name;
         message.success(sessionId ? `已切换至「${sessionName}」，API 已重启` : "已清除会话限制，API 已重启");
@@ -129,6 +139,7 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
       ...overrides,
     };
     const snapshot = await vaultApi.settingsUpdate(nextSettings);
+    if (!mountedRef.current) return;
     onSettingsChange(snapshot);
   }
 
@@ -159,7 +170,7 @@ export function AiApiPanel({ open, onClose, initialValue, sessions, onApiServerC
     });
     void navigator.clipboard.writeText(text).then(() => {
       setAiApiCopied(true);
-      setTimeout(() => setAiApiCopied(false), 2000);
+      setSafeTimeout(() => setAiApiCopied(false), 2000);
       message.success("已复制 API 使用说明（含 HTTP + WebSocket 协议）");
     });
   }

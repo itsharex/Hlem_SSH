@@ -4,6 +4,7 @@ import { appApi } from "../api/appApi";
 import { isTauriRuntime } from "../api/runtime";
 import { vaultApi } from "../api/vaultApi";
 import { getErrorMessage } from "../lib/configMapping";
+import { useAnimationFrameRegistry, useMountedRef } from "../lib/reactLifecycle";
 import type { AppInfo, ConfigSnapshot } from "../types";
 
 type UseAppBootstrapOptions = {
@@ -17,6 +18,8 @@ export function useAppBootstrap({ applySnapshot, initializeApiServerRuntime }: U
   const [migrationBusy, setMigrationBusy] = useState(false);
   const [migrationError, setMigrationError] = useState<string>();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const mountedRef = useMountedRef();
+  const requestSafeAnimationFrame = useAnimationFrameRegistry();
 
   useEffect(() => {
     void initializeApp();
@@ -26,10 +29,13 @@ export function useAppBootstrap({ applySnapshot, initializeApiServerRuntime }: U
     try {
       const needsMigration = await vaultApi.needsMigration();
       if (needsMigration) {
+        if (!mountedRef.current) return;
         setMigrationNeeded(true);
         return;
       }
-      applySnapshot(await vaultApi.snapshot());
+      const snapshot = await vaultApi.snapshot();
+      if (!mountedRef.current) return;
+      applySnapshot(snapshot);
       setAppReady(true);
     } catch (error) {
       console.error("[helm] Failed to load config snapshot:", error);
@@ -52,30 +58,33 @@ export function useAppBootstrap({ applySnapshot, initializeApiServerRuntime }: U
     setMigrationError(undefined);
     try {
       const snapshot = await action();
+      if (!mountedRef.current) return;
       setMigrationNeeded(false);
       applySnapshot(snapshot);
       setAppReady(true);
       void initializeAppMetadata();
     } catch (error) {
-      setMigrationError(getErrorMessage(error));
+      if (mountedRef.current) setMigrationError(getErrorMessage(error));
     } finally {
-      setMigrationBusy(false);
+      if (mountedRef.current) setMigrationBusy(false);
     }
   }
 
   async function initializeAppMetadata() {
     try {
-      setAppInfo(await appApi.info());
+      const info = await appApi.info();
+      if (mountedRef.current) setAppInfo(info);
     } catch {
       // 版本信息失败不影响主流程。
     }
-    await initializeApiServerRuntime();
+    if (mountedRef.current) await initializeApiServerRuntime();
   }
 
   function signalFrontendReady() {
     if (!isTauriRuntime()) return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
+    requestSafeAnimationFrame(() => {
+      requestSafeAnimationFrame(() => {
+        if (!mountedRef.current) return;
         void invoke("frontend_ready").catch(() => undefined);
       });
     });

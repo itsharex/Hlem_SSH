@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, BackupSettings, ConfigSnapshot, GroupInput, SessionInput, SshOptions, TunnelConfig, TunnelInput, VaultData } from "../types";
-import { isTauriRuntime } from "./runtime";
+import { browserUnavailable, browserUnavailableSync, call } from "./bridge";
 import { readJsonStorage, removeStorage, writeJsonStorage } from "../lib/storage";
 
 const BROWSER_VAULT_KEY = "helm.browserVault";
@@ -8,7 +7,7 @@ const BROWSER_VAULT_KEY = "helm.browserVault";
 export const vaultApi = {
   needsMigration: () => call<boolean>("vault_needs_migration", () => false),
   migrate: (oldPassword: string) =>
-    call<ConfigSnapshot>("vault_migrate", () => { throw new Error("浏览器环境无需迁移"); }, { oldPassword }),
+    call<ConfigSnapshot>("vault_migrate", () => browserUnavailableSync("迁移"), { oldPassword }),
   skipMigration: () =>
     call<ConfigSnapshot>("vault_skip_migration", browserSkipMigration),
   snapshot: () => call<ConfigSnapshot>("config_snapshot", browserSnapshot),
@@ -44,13 +43,6 @@ export const vaultApi = {
   tunnelList: () => call<TunnelConfig[]>("tunnel_list", () => browserSnapshot().data.tunnels),
 };
 
-function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: Record<string, unknown>): Promise<T> {
-  if (isTauriRuntime()) {
-    return invoke<T>(command, args);
-  }
-  return Promise.resolve(browserFallback());
-}
-
 let browserUnlocked: ConfigSnapshot | null = null;
 
 function browserSkipMigration(): ConfigSnapshot {
@@ -61,10 +53,6 @@ function browserSkipMigration(): ConfigSnapshot {
 
 function browserSnapshot(): ConfigSnapshot {
   return requireBrowserUnlocked();
-}
-
-function browserUnavailable(capability: string): never {
-  throw new Error(`浏览器环境无法使用：${capability}`);
 }
 
 function browserSettingsUpdate(settings: AppSettings): ConfigSnapshot {

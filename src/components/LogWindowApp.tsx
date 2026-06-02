@@ -4,6 +4,7 @@ import zhCN from "antd/locale/zh_CN";
 import { useEffect, useRef, useState } from "react";
 import { appApi, type ApiLogEntry } from "../api/appApi";
 import { appEvents } from "../api/appEvents";
+import { useTimeoutRegistry } from "../lib/reactLifecycle";
 
 export function LogWindowApp() {
   const [logs, setLogs] = useState<ApiLogEntry[]>([]);
@@ -12,18 +13,22 @@ export function LogWindowApp() {
   const [detailCopied, setDetailCopied] = useState(false);
   const [selectedLog, setSelectedLog] = useState<ApiLogEntry | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const setSafeTimeout = useTimeoutRegistry();
 
   useEffect(() => {
-    // 启动时拉取一次全量历史；之后通过 api://log 事件增量推送。
-    // 加 5s fallback 轮询兜底（子窗口可能因 capabilities 限制收不到 emit 事件）。
-    const load = () => void appApi.apiServerLogs().then(setLogs).catch(() => undefined);
-    load();
     let mounted = true;
     let unlisten: (() => void) | null = null;
     let fallbackTimer: number | null = null;
+    const load = () => {
+      void appApi.apiServerLogs()
+        .then((items) => {
+          if (mounted) setLogs(items);
+        })
+        .catch(() => undefined);
+    };
+    load();
     void appEvents.onApiLog((entry) => {
       if (!mounted) return;
-      // 收到推送说明事件通道正常，停掉 fallback 轮询
       if (fallbackTimer !== null) { clearInterval(fallbackTimer); fallbackTimer = null; }
       setLogs((prev) => {
         const next = [...prev, entry];
@@ -58,7 +63,7 @@ export function LogWindowApp() {
     }).join("\n\n");
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setSafeTimeout(() => setCopied(false), 2000);
     });
   }
 
@@ -73,7 +78,7 @@ export function LogWindowApp() {
     ];
     void navigator.clipboard.writeText(lines.join("\n")).then(() => {
       setCopiedIndex(index);
-      setTimeout(() => setCopiedIndex(null), 1500);
+      setSafeTimeout(() => setCopiedIndex(null), 1500);
     });
   }
 
@@ -167,7 +172,7 @@ export function LogWindowApp() {
                         ];
                         void navigator.clipboard.writeText(lines.join("\n")).then(() => {
                           setDetailCopied(true);
-                          setTimeout(() => setDetailCopied(false), 1500);
+                          setSafeTimeout(() => setDetailCopied(false), 1500);
                         });
                       }}
                       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.click(); }}

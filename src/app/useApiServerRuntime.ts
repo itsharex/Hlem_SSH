@@ -1,13 +1,16 @@
 import { useState, type MutableRefObject } from "react";
 import { appApi } from "../api/appApi";
+import { useMountedRef } from "../lib/reactLifecycle";
 import type { ConfigSnapshot } from "../types";
 
 export function useApiServerRuntime(configSnapshotRef: MutableRefObject<ConfigSnapshot | undefined>) {
   const [apiServerRunning, setApiServerRunning] = useState(false);
+  const mountedRef = useMountedRef();
 
   async function initializeApiServerRuntime() {
     try {
       const status = await appApi.apiServerStatus();
+      if (!mountedRef.current) return;
       setApiServerRunning(status.running);
       if (status.running) return;
 
@@ -16,6 +19,7 @@ export function useApiServerRuntime(configSnapshotRef: MutableRefObject<ConfigSn
 
       try {
         const info = await appApi.apiServerStart(settings.aiApiPort, settings.aiApiSessionId);
+        if (!mountedRef.current) return;
         setApiServerRunning(info.running);
       } catch {
         // 自动启动失败不影响主流程。

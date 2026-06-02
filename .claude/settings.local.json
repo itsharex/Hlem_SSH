@@ -42,7 +42,8 @@
       "Bash(wmic process *)",
       "Bash(grep -v \"^$\")",
       "Bash(tasklist /v /fi \"imagename eq helm.exe\")",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d['app']['windows'], indent=2\\)\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d['app']['windows'], indent=2\\)\\)\")",
+      "Bash(echo)"
     ]
   }
 }

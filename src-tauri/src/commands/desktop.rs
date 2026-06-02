@@ -2,6 +2,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 use base64::{engine::general_purpose, Engine as _};
@@ -9,7 +10,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
-use super::{AppError, AppResult, resolve_vault_path};
+use super::{resolve_vault_path, AppError, AppResult};
+use crate::http_client::{http_client, send_with_retry};
+
+const UPDATE_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,9 +51,9 @@ pub async fn local_expand_paths(paths: Vec<String>) -> AppResult<Vec<LocalExpand
                 .to_string();
             let mut stack = vec![(root_path.clone(), root_name.clone())];
             while let Some((dir, prefix)) = stack.pop() {
-                let mut entries = tokio::fs::read_dir(&dir)
-                    .await
-                    .map_err(|error| AppError::Io(format!("无法读取目录 {}: {error}", dir.display())))?;
+                let mut entries = tokio::fs::read_dir(&dir).await.map_err(|error| {
+                    AppError::Io(format!("无法读取目录 {}: {error}", dir.display()))
+                })?;
                 while let Some(entry) = entries
                     .next_entry()
                     .await
@@ -79,12 +84,13 @@ pub async fn local_expand_paths(paths: Vec<String>) -> AppResult<Vec<LocalExpand
 #[tauri::command]
 pub async fn fetch_text_url(url: String) -> AppResult<String> {
     let trimmed = validate_http_url(&url)?;
-    let response = reqwest::Client::new()
-        .get(trimmed)
-        .header(reqwest::header::USER_AGENT, "HelM-Updater")
-        .send()
-        .await
-        .map_err(|error| AppError::Remote(format!("读取远程内容失败：{error}")))?;
+    let client = http_client(UPDATE_FETCH_TIMEOUT)?;
+    let response = send_with_retry("读取远程内容", || {
+        client
+            .get(trimmed)
+            .header(reqwest::header::USER_AGENT, "HelM-Updater")
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "读取远程内容失败：HTTP {}",
@@ -105,12 +111,13 @@ pub async fn download_update(
     sha256: Option<String>,
 ) -> AppResult<String> {
     let trimmed = validate_http_url(&url)?;
-    let response = reqwest::Client::new()
-        .get(trimmed)
-        .header(reqwest::header::USER_AGENT, "HelM-Updater")
-        .send()
-        .await
-        .map_err(|error| AppError::Remote(format!("下载更新失败：{error}")))?;
+    let client = http_client(UPDATE_DOWNLOAD_TIMEOUT)?;
+    let response = send_with_retry("下载更新", || {
+        client
+            .get(trimmed)
+            .header(reqwest::header::USER_AGENT, "HelM-Updater")
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
             "下载更新失败：HTTP {}",

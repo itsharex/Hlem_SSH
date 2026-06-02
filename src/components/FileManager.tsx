@@ -20,6 +20,7 @@ import { readJsonStorage, writeJsonStorage } from "../lib/storage";
 import { editorChannelName, GLOBAL_EDITOR_CHANNEL, type EditorChannelMessage } from "../lib/editorChannel";
 import { getParentPath, joinPath, normalizePath } from "../lib/path";
 import { isTauriRuntime } from "../api/runtime";
+import { useMountedRef } from "../lib/reactLifecycle";
 import { sortRemoteEntries, compareEntryGroup, compareEntryName, formatBeijingModifiedTime } from "../lib/fileClassify";
 import { fileCategoryMeta } from "./fileManager/fileIcons";
 import { QuickCommandTopArea } from "./fileManager/QuickCommandPanel";
@@ -185,6 +186,7 @@ export function FileManager({
   const [commandValue, setCommandValue] = useState("");
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => ({ ...inMemoryColumnWidths }));
   const columnWidthsRef = useRef(columnWidths);
+  const mountedRef = useMountedRef();
   useEffect(() => {
     columnWidthsRef.current = columnWidths;
     inMemoryColumnWidths = columnWidths;
@@ -194,6 +196,7 @@ export function FileManager({
   const searchSeq = useRef(0);
   const directoryExpandedKeysRef = useRef<string[]>(["/"]);
   const detachedEditorsRef = useRef<Map<string, BroadcastChannel>>(new Map());
+  const columnResizeCleanupRef = useRef<(() => void) | null>(null);
   const path = normalizePath(session.currentPath);
   const canUseFiles = session.state === "connected" && Boolean(session.sftpId);
   const canRefreshFiles = canUseFiles || (session.state === "connected" && Boolean(session.connectionId));
@@ -215,19 +218,22 @@ export function FileManager({
   );
 
   const handleColumnResizeStart = useCallback((key: string, startX: number) => {
+    columnResizeCleanupRef.current?.();
     const startWidth = columnWidthsRef.current[key] ?? DEFAULT_COLUMN_WIDTHS[key] ?? 100;
     function onMove(event: MouseEvent) {
       const next = Math.max(MIN_COLUMN_WIDTH, Math.round(startWidth + event.clientX - startX));
       setColumnWidths((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
     }
-    function onUp() {
+    const cleanup = () => {
       window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mouseup", cleanup);
       document.body.classList.remove("isResizingColumn");
-    }
+      if (columnResizeCleanupRef.current === cleanup) columnResizeCleanupRef.current = null;
+    };
     window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mouseup", cleanup);
     document.body.classList.add("isResizingColumn");
+    columnResizeCleanupRef.current = cleanup;
   }, []);
 
   const resizableColumns = useMemo<ColumnsType<RemoteFileEntry>>(
@@ -267,6 +273,8 @@ export function FileManager({
 
   useEffect(() => {
     return () => {
+      columnResizeCleanupRef.current?.();
+      columnResizeCleanupRef.current = null;
       detachedEditorsRef.current.forEach((channel) => channel.close());
       detachedEditorsRef.current.clear();
     };
@@ -309,11 +317,14 @@ export function FileManager({
       const entries = targetPath === path && filesBelongToDirectory(allFiles, targetPath)
         ? allFiles
         : await onListDirectory(targetPath);
+      if (!mountedRef.current) return;
       setDirectoryEntries((current) => ({ ...current, [targetPath]: sortRemoteEntries(entries) }));
     } catch (error) {
-      message.error(getErrorMessage(error));
+      if (mountedRef.current) message.error(getErrorMessage(error));
     } finally {
-      setDirectoryLoadingKeys((current) => current.filter((key) => key !== targetPath));
+      if (mountedRef.current) {
+        setDirectoryLoadingKeys((current) => current.filter((key) => key !== targetPath));
+      }
     }
   }
 
@@ -350,15 +361,15 @@ export function FileManager({
       setSearching(true);
       void onRemoteSearch(query)
         .then((targetPath) => {
-          if (searchSeq.current !== seq) return;
+          if (!mountedRef.current || searchSeq.current !== seq) return;
           setFocusedPath(targetPath);
         })
         .catch(() => {
-          if (searchSeq.current !== seq) return;
+          if (!mountedRef.current || searchSeq.current !== seq) return;
           setFocusedPath(null);
         })
         .finally(() => {
-          if (searchSeq.current === seq) setSearching(false);
+          if (mountedRef.current && searchSeq.current === seq) setSearching(false);
         });
     }, 450);
     return () => window.clearTimeout(timer);
@@ -416,6 +427,7 @@ export function FileManager({
     message.open({ key: messageKey, type: "loading", content: "正在读取文件...", duration: 0 });
     try {
       const content = await onReadText(targetPath, sessionId);
+      if (!mountedRef.current) return;
 
       // 如果已有编辑器窗口，直接发送 addTab
       const existingChannel = detachedEditorsRef.current.values().next().value as BroadcastChannel | undefined;
@@ -462,16 +474,18 @@ export function FileManager({
           resizable: true,
         });
         await webview.once("tauri://error", (event) => {
-          message.error(String(event.payload));
+          if (mountedRef.current) message.error(String(event.payload));
         });
       } else {
         window.open(`${window.location.origin}${window.location.pathname}?editorWindow=${editorId}`, `editor-global`, "width=1100,height=760");
       }
-      message.destroy(messageKey);
+      if (mountedRef.current) message.destroy(messageKey);
     } catch (error) {
-      message.open({ key: messageKey, type: "error", content: getErrorMessage(error), duration: 3 });
+      if (mountedRef.current) {
+        message.open({ key: messageKey, type: "error", content: getErrorMessage(error), duration: 3 });
+      }
     } finally {
-      setOpeningEditorPath(null);
+      if (mountedRef.current) setOpeningEditorPath(null);
     }
   }
 
@@ -480,9 +494,9 @@ export function FileManager({
     if (localPaths.length === 0) return;
     try {
       await onUploadFiles(localPaths, path);
-      message.success(`已开始上传 ${localPaths.length} 个文件`);
+      if (mountedRef.current) message.success(`已开始上传 ${localPaths.length} 个文件`);
     } catch (error) {
-      message.error(getErrorMessage(error));
+      if (mountedRef.current) message.error(getErrorMessage(error));
     }
   }
 
@@ -512,7 +526,7 @@ export function FileManager({
     try {
       await onRefresh();
     } finally {
-      setRefreshing(false);
+      if (mountedRef.current) setRefreshing(false);
     }
   }
 
@@ -523,10 +537,12 @@ export function FileManager({
     message.open({ key, type: "loading", content: `已开始${label}...`, duration: 0 });
     void onFileOperation(operation)
       .then(() => {
-        message.open({ key, type: "success", content: `${label}完成`, duration: 2.5 });
+        if (mountedRef.current) message.open({ key, type: "success", content: `${label}完成`, duration: 2.5 });
       })
       .catch((error) => {
-        message.open({ key, type: "error", content: `${label}失败：${getErrorMessage(error)}`, duration: 4 });
+        if (mountedRef.current) {
+          message.open({ key, type: "error", content: `${label}失败：${getErrorMessage(error)}`, duration: 4 });
+        }
       });
   }
 

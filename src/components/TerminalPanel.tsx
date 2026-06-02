@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { appApi } from "../api/appApi";
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { useAnimationFrameRegistry } from "../lib/reactLifecycle";
 import { readJsonStorage, writeJsonStorage } from "../lib/storage";
 import type { RemoteSession, TerminalEntry } from "../types";
 
@@ -38,6 +39,7 @@ const INPUT_HISTORY_LIMIT = 15;
 export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendData, onResize, onClear, onReopenTerminal, onInputHistoryChange }: TerminalPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; selectedText: string } | null>(null);
   const [actionFlash, setActionFlash] = useState<"paste" | "copyAll" | "clear" | "history" | null>(null);
+  const requestSafeAnimationFrame = useAnimationFrameRegistry();
   const [inputHistory, setInputHistory] = useState<InputHistoryEntry[]>(() => mergeInputHistory(loadInputHistory(), inputHistoryProp));
   const onInputHistoryChangeRef = useRef(onInputHistoryChange);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -201,10 +203,10 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     fitAddonRef.current = fitAddon;
 
     const resizeObserver = new ResizeObserver(() => {
-      window.requestAnimationFrame(fitAndResizeTerminal);
+      requestSafeAnimationFrame(fitAndResizeTerminal);
     });
     resizeObserver.observe(host);
-    window.requestAnimationFrame(() => {
+    requestSafeAnimationFrame(() => {
       fitAndResizeTerminal();
       terminal.focus();
     });
@@ -221,7 +223,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
 
   useEffect(() => {
     if (!session.terminalId) return;
-    window.requestAnimationFrame(fitAndResizeTerminal);
+    requestSafeAnimationFrame(fitAndResizeTerminal);
   }, [session.terminalId]);
 
   useEffect(() => {
@@ -374,7 +376,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
     inputValueRef.current = value;
     setInputValue(value);
     const end = value.length;
-    window.requestAnimationFrame(() => {
+    requestSafeAnimationFrame(() => {
       const node = inputRef.current;
       if (!node) return;
       try {
@@ -446,7 +448,7 @@ export function TerminalPanel({ session, inputHistory: inputHistoryProp, onSendD
       resetHistoryNavigation();
     }
     setHistoryOpen(false);
-    window.requestAnimationFrame(() => terminalRef.current?.focus());
+    requestSafeAnimationFrame(() => terminalRef.current?.focus());
   }
 
   function deleteHistoryEntry(index: number) {

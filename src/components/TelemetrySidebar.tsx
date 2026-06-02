@@ -12,6 +12,7 @@ import { formatBytes, formatUsage, percent } from "../lib/format";
 import { createEmptyTelemetry } from "../lib/remoteDefaults";
 import type { DiskMetric, ProcessInfo, RemoteSession } from "../types";
 import { useState } from "react";
+import { useTimeoutRegistry } from "../lib/reactLifecycle";
 
 interface TelemetrySidebarProps {
   session: RemoteSession;
@@ -61,6 +62,7 @@ export function TelemetrySidebar({
   session,
 }: TelemetrySidebarProps) {
   const [copied, setCopied] = useState(false);
+  const setSafeTimeout = useTimeoutRegistry();
   const isConnected = session.state === "connected";
   const state = session.state;
   const telemetry = isConnected ? session.telemetry : createEmptyTelemetry(session.host);
@@ -84,7 +86,7 @@ export function TelemetrySidebar({
               onClick={() => {
                 void navigator.clipboard.writeText(telemetry.ip);
                 setCopied(true);
-                window.setTimeout(() => setCopied(false), 900);
+                setSafeTimeout(() => setCopied(false), 900);
               }}
             >
               {copied ? "已复制" : telemetry.ip}

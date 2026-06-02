@@ -1,4 +1,4 @@
-import { useRef, type MutableRefObject } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { remoteApi } from "../api/remoteApi";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./appHelpers";
 import { getErrorMessage } from "../lib/configMapping";
 import { normalizePath as normalizeRemotePath } from "../lib/path";
+import { useMountedRef } from "../lib/reactLifecycle";
 import { createTerminalEntry } from "../lib/session";
 import type { RemoteSession, TerminalClosedEvent, TerminalEntry, TerminalOutputEvent } from "../types";
 
@@ -31,6 +32,11 @@ export function useTerminalRuntime({
   const pendingTerminalEntriesRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputBuffersRef = useRef<Map<string, TerminalEntry[]>>(new Map());
   const terminalOutputFlushRef = useRef<number | null>(null);
+  const mountedRef = useMountedRef();
+
+  useEffect(() => {
+    return () => clearTerminalOutputBuffers();
+  }, []);
 
   function registerTerminal(terminalId: string, sessionId: string) {
     terminalSessionMapRef.current.set(terminalId, sessionId);
@@ -164,6 +170,7 @@ export function useTerminalRuntime({
     void remoteApi
       .listFiles(session.sftpId, nextPath)
       .then((files) => {
+        if (!mountedRef.current) return;
         setSessions((current) =>
           current.map((item) =>
             item.id === session.id && normalizeRemotePath(item.currentPath) === nextPath ? { ...item, files } : item,
@@ -171,7 +178,9 @@ export function useTerminalRuntime({
         );
       })
       .catch(() => undefined)
-      .finally(() => setSessionFilesLoading(session.id, false));
+      .finally(() => {
+        if (mountedRef.current) setSessionFilesLoading(session.id, false);
+      });
   }
 
   async function sendTerminalData(sessionId: string, terminalId: string | null | undefined, data: string) {

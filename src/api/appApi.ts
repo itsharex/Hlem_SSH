@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo, UpdateInfo } from "../types";
-import { isTauriRuntime } from "./runtime";
+import { browserUnavailable, call } from "./bridge";
 
 export type LocalExpandedEntry = {
   localPath: string;
@@ -85,11 +84,6 @@ export const appApi = {
   apiServerLogs: () =>
     call<ApiLogEntry[]>("api_server_logs", () => [], undefined),
 };
-
-async function call<T>(command: string, browserFallback: () => T | Promise<T>, args?: Record<string, unknown>): Promise<T> {
-  if (isTauriRuntime()) return invoke<T>(command, args);
-  return browserFallback();
-}
 
 async function checkUpdate(currentVersion: string, currentArch = ""): Promise<UpdateInfo | null> {
   if (!UPDATE_REPO) return null;
@@ -252,10 +246,6 @@ function browserInfo(): AppInfo {
 function browserDownload(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
   return Promise.resolve("已在浏览器中打开下载地址");
-}
-
-function browserUnavailable(capability: string): Promise<never> {
-  return Promise.reject(new Error(`浏览器环境无法使用：${capability}`));
 }
 
 function browserOpenUrl(url: string) {
